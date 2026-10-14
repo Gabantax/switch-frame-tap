@@ -29,7 +29,7 @@ static int g_ui_scroll_to = -1;            /* bring this row into view at the ne
 static SDL_Window *g_ui_win = NULL;        /* for the fullscreen switch's state (app_events sets it) */
 
 enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_UPS, H_HUD, H_HWDEC,
-       H_PIC, H_PIC_RESET, H_SOUND, H_REC, H_PANEL, H_FSR_SHARP };
+       H_PIC, H_PIC_RESET, H_SOUND, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT };
 
 typedef struct { SDL_FRect r; int id, arg; } ui_hit_t;
 static ui_hit_t g_ui_hits[96];
@@ -363,6 +363,19 @@ static void ui_drawer(SDL_Renderer *ren, float W)
             ui_text_fit(ren, line, (int)cx, (int)y, 13, 0, UI_FAINT, 0, (int)cw);
             y += 24;
         }
+    }
+    /* the very end of the panel: one faint line, a link only for whoever
+     * looks for it (never shown anywhere else, never asks) */
+    {
+        y += 18;
+        const char *pre = "Free and open source  -  ", *link = "support the project";
+        const int pw = text_width(pre, 13, 0), lw = text_width(link, 13, 0);
+        text_draw(ren, pre, (int)cx, (int)y, 13, 0, UI_FAINT, 0);
+        const int hov = ui_in(cx + pw, y - 2, lw, 20);
+        text_draw(ren, link, (int)cx + pw, (int)y, 13, 0, hov ? UI_DIM : UI_FAINT, 0);
+        if (hov) ui_rrect(ren, cx + pw, y + 17, lw, 1, 0, UI_DIM);
+        ui_hit(cx + pw, y - 2, lw, 20, H_SUPPORT, 0);
+        y += 22;
     }
     y += 16;
     g_ui_content_h = y - y_start;
@@ -712,6 +725,7 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_PIC_RESET: g_pic = pic_default; prefs_save(); break;
             case H_SOUND: act_mute(!h->arg); break;
             case H_REC: act_record(win); break;
+            case H_SUPPORT: SDL_OpenURL("https://buymeacoffee.com/papux200"); break;
             }
             return 1;
         }

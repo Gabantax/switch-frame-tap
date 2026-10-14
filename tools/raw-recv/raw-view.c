@@ -735,6 +735,12 @@ static const enum AVHWDeviceType h264_hw_order[] = {
 #endif
 };
 
+#ifdef SFT_VA_SHIM
+/* v0.7.13: the portable Linux build reaches the system's libva through
+ * gen_va_shim.py's loader; 1 = it is there, VAAPI can be tried */
+int sft_va_load(void);
+#endif
+
 static enum AVPixelFormat h264_get_format(AVCodecContext *c, const enum AVPixelFormat *fmts)
 {
     h264_t *d = c->opaque;
@@ -762,6 +768,9 @@ static int h264_open(h264_t *d, int low_latency, int threads, int hw)
     d->hwfmt = AV_PIX_FMT_NONE;
     d->hwname = NULL;
     for (size_t k = 0; hw && k < sizeof(h264_hw_order) / sizeof(h264_hw_order[0]) && d->hwfmt == AV_PIX_FMT_NONE; k++) {
+#ifdef SFT_VA_SHIM
+        if (h264_hw_order[k] == AV_HWDEVICE_TYPE_VAAPI && !sft_va_load()) continue;
+#endif
         for (int i = 0;; i++) {
             const AVCodecHWConfig *cfg = avcodec_get_hw_config(codec, i);
             if (!cfg) break;

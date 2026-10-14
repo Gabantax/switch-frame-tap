@@ -23,24 +23,59 @@ L="$REPO/ref/linux"
 SDLV=2.32.10
 mkdir -p "$L"
 
-# ---- FFmpeg, static, only the viewer's pieces
+# ---- v0.7.13: the GPU decoders' build-time pieces (headers only; nothing of
+# them is linked): NVIDIA's codec headers - FFmpeg loads the NVIDIA driver
+# itself at runtime - and libva's headers, with placeholder libva / libva-drm
+# libraries that only exist so FFmpeg's configure check passes. The viewer
+# reaches the system's own libva through gen_va_shim.py's loader instead.
+D="$L/deps"
+NVH=n13.0.19.0; VAV=2.24.1
+if [ ! -f "$D/.ready-$NVH-$VAV" ]; then
+    echo "== GPU decoder headers (nv-codec-headers $NVH, libva $VAV)"
+    rm -rf "$D"; mkdir -p "$D"
+    tar -xzf "$REPO/ref/nv-codec-headers-$NVH.tar.gz" -C "$D"
+    make -s -C "$D/nv-codec-headers-$NVH" PREFIX="$D/ffnvcodec" install
+    tar -xzf "$REPO/ref/libva-$VAV.tar.gz" -C "$D"
+    mkdir -p "$D/va/include/va" "$D/va/lib/pkgconfig"
+    cp "$D/libva-$VAV"/va/*.h "$D/libva-$VAV/va/drm/va_drm.h" "$D/va/include/va/"
+    # VA-API 1.14 (libva 2.14, Ubuntu 22.04): FFmpeg then only uses functions
+    # every libva 2.14+ has, so the loader finds all of them on older systems too
+    sed -e 's/@VA_API_MAJOR_VERSION@/1/; s/@VA_API_MINOR_VERSION@/14/; s/@VA_API_MICRO_VERSION@/0/; s/@VA_API_VERSION@/1.14.0/' \
+        "$D/libva-$VAV/va/va_version.h.in" > "$D/va/include/va/va_version.h"
+    echo 'void vaInitialize(void) {}' | gcc -shared -fPIC -x c - -o "$D/va/lib/libva.so"
+    echo 'void vaGetDisplayDRM(void) {}' | gcc -shared -fPIC -x c - -o "$D/va/lib/libva-drm.so"
+    for n in libva libva-drm; do
+        printf 'Name: %s\nDescription: placeholder for configure\nVersion: 1.14.0\nCflags: -I%s\nLibs: -L%s -l%s\n' \
+            "$n" "$D/va/include" "$D/va/lib" "${n#lib}" > "$D/va/lib/pkgconfig/$n.pc"
+    done
+    touch "$D/.ready-$NVH-$VAV"
+fi
+
+# ---- FFmpeg, static, only the viewer's pieces (v0.7.13: + VAAPI and NVDEC)
 FF="$L/ffmpeg-min"
-if [ ! -f "$FF/lib/libavcodec.a" ]; then
-    echo "== FFmpeg 8.1 (minimal, static)"
+if [ ! -f "$FF/lib/libavcodec.a" ] || [ ! -f "$FF/.hw-$NVH-$VAV" ]; then
+    echo "== FFmpeg 8.1 (minimal, static, VAAPI + NVDEC)"
+    rm -rf "$FF"
     [ -d "$REPO/ref/ffmpeg-8.1" ] || tar -xJf "$REPO/ref/ffmpeg-8.1.tar.xz" -C "$REPO/ref"
     B="$REPO/ref/ffmpeg-8.1/build-linux"
     rm -rf "$B"; mkdir -p "$B"; cd "$B"
-    "$REPO/ref/ffmpeg-8.1/configure" \
+    PKG_CONFIG_PATH="$D/ffnvcodec/lib/pkgconfig:$D/va/lib/pkgconfig" "$REPO/ref/ffmpeg-8.1/configure" \
         --prefix="$FF" --enable-static --disable-shared --enable-pic \
         --disable-everything --disable-autodetect --disable-programs --disable-doc \
         --disable-network --disable-avdevice --disable-avfilter --disable-swscale --disable-swresample \
         --enable-decoder=h264 --enable-parser=h264 \
         --enable-encoder=aac \
         --enable-muxer=mp4 --enable-protocol=file \
-        --enable-x86asm > configure.log 2>&1 || { tail -30 configure.log; exit 1; }
+        --enable-vaapi --enable-ffnvcodec --enable-cuda --enable-nvdec \
+        --enable-hwaccel=h264_vaapi,h264_nvdec \
+        --pkg-config-flags=--static \
+        --enable-x86asm > configure.log 2>&1 \
+        < /dev/null || { tail -30 configure.log; exit 1; }
+    grep -q "h264_vaapi" configure.log && grep -q "h264_nvdec" configure.log || { echo "FFmpeg: no VAAPI/NVDEC hwaccel"; grep -E "^Enabled hwaccels" -A3 configure.log; exit 1; }
     make -j"${JOBS:-6}" > make.log 2>&1 || { tail -40 make.log; exit 1; }
     make install > install.log 2>&1
     cp "$REPO/ref/ffmpeg-8.1/COPYING.LGPLv2.1" "$FF/"
+    touch "$FF/.hw-$NVH-$VAV"
 fi
 
 # ---- SDL 2, static, backends loaded at runtime
@@ -69,9 +104,10 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 cd "$HERE"
 SDL_CFLAGS=$("$SDL/bin/sdl2-config" --cflags)
 SDL_LIBS=$("$SDL/bin/sdl2-config" --static-libs)
-gcc -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 \
+python3 "$HERE/gen_va_shim.py" "$OUT/va_shim.c" "$FF/lib/libavcodec.a" "$FF/lib/libavutil.a"
+gcc -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 -DSFT_VA_SHIM \
     -I"$FF/include" $SDL_CFLAGS $(pkg-config --cflags libusb-1.0) \
-    -o "$OUT/switch-frame-tap-viewer" raw-view.c \
+    -o "$OUT/switch-frame-tap-viewer" raw-view.c "$OUT/va_shim.c" \
     "$FF/lib/libavformat.a" "$FF/lib/libavcodec.a" "$FF/lib/libavutil.a" \
     $SDL_LIBS \
     /usr/lib/x86_64-linux-gnu/libusb-1.0.a -ludev -lpthread -lm -ldl

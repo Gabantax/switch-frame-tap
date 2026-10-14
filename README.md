@@ -282,8 +282,10 @@ on Windows.
 
 **Hardware decoding** (v0.7.12): the viewer decodes with the graphics card's
 video decoder - about 5 ms less latency in busy scenes and no keyframe
-stutter - and falls back to the CPU by itself. On by default on Linux built
-from source (VAAPI or NVDEC); on Windows (D3D11VA) and macOS (VideoToolbox)
+stutter - and falls back to the CPU by itself. On by default on Linux (VAAPI
+for AMD and Intel, the Steam Deck included, or NVDEC for NVIDIA - since v0.7.13
+also in the ready-made Linux download, which loads the system's libva only if
+it is there); on Windows (D3D11VA) and macOS (VideoToolbox)
 it is still being tested, so it is off by default there - turn it on in
 Settings and tell us how it goes. `--software` (or `hwdec=0` in viewer.ini)
 decodes on the CPU.

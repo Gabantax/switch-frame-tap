@@ -134,13 +134,10 @@ static void size_video_window(SDL_Window *win, int width, int height)
     SDL_SetWindowSize(win, width, height);
 }
 /* v0.7.12: the GPU's video decoder (viewer.ini hwdec=, Settings, --software).
- * Tested on Linux (VAAPI); on Windows and macOS still being tested, so there
- * it starts off until the user turns it on. */
-#if defined(_WIN32) || defined(__APPLE__)
-static int g_hwdec = 0;
-#else
+ * Tested on Linux (VAAPI, NVDEC). v0.7.13-test: on everywhere, so the test
+ * builds try D3D11VA (Windows) and VideoToolbox (macOS) too; it falls back to
+ * the CPU by itself. A full release keeps it on where it has been confirmed. */
 static int g_hwdec = 1;
-#endif
 
 /* ---- v0.3: game audio ------------------------------------------------------
  * The console sends the sound since the last frame as its own packet before

@@ -23,6 +23,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
+      # FFmpeg and SDL 2 take most of the build: keep them between runs. The key
+      # follows build-macos.sh, so changing their versions or settings there
+      # builds them fresh.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ref/macos-*/ffmpeg-min
+            ref/macos-*/sdl2
+          key: macos-deps-${{ matrix.runner }}-${{ hashFiles('tools/raw-recv/build-macos.sh') }}
       - name: Dependencies
         run: brew install libusb pkg-config nasm cmake
       - name: Build

@@ -294,7 +294,8 @@ decodes on the CPU.
 bigger than the stream (say 1080p shown on a 1440p or 4K monitor), **U**
 sharpens the enlargement on your graphics card instead of a plain stretch.
 **FSR 1** (AMD FidelityFX Super Resolution) works on any GPU with OpenGL 4.3;
-**NIS** (NVIDIA Image Scaling) too, despite the name; on Windows, **RTX VSR**
+**NIS** (NVIDIA Image Scaling) too, despite the name; on macOS, FSR 1 runs
+on Metal (since v0.7.13, DiM3NT0R's PR #14); on Windows, **RTX VSR**
 uses an RTX card's own AI upscaler (turn on *RTX Video Enhancement - Super
 resolution* in the NVIDIA app or Control Panel; it costs a few milliseconds
 of latency). Recordings and screenshots keep the console's own picture.

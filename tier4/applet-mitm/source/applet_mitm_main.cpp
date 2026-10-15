@@ -11,6 +11,7 @@
  */
 #include <stratosphere.hpp>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include "applet_mitm_service.hpp"
 #include "applet_mitm_sm.hpp"
@@ -237,8 +238,20 @@ namespace ams {
                 const s64 v = k == 0 ? static_cast<s64>(cur[k] >> 20) : static_cast<s64>(cur[k]);   /* memory in MB */
                 if (v != last[k]) { moved = true; last[k] = v; }
             }
+            /* v0.7.13: and the System group's memory - every custom sysmodule,
+             * am among the system's, shares it; when it runs out am fatals with
+             * 2001-0132 at boot (#15, GBAtemp). In KB: it is a few MB. */
+            u64 scur = 0, slim = 0;
+            static s64 last_sys = -1;
+            if (R_SUCCEEDED(pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(scur), std::addressof(slim), pm::ResourceLimitGroup_System, svc::LimitableResource_PhysicalMemoryMax))) {
+                const s64 v = static_cast<s64>(scur >> 18);   /* 256 KB steps */
+                if (v != last_sys) { moved = true; last_sys = v; }
+            }
             if (!moved && tag == nullptr) { return; }
             if (tag != nullptr) { mitm::applet::LogLine("applet group @ %s:", tag); }
+            mitm::applet::LogLine("system group: memory %llu/%llu KB used (%lld KB free)",
+                                  static_cast<unsigned long long>(scur >> 10), static_cast<unsigned long long>(slim >> 10),
+                                  static_cast<long long>((static_cast<s64>(slim) - static_cast<s64>(scur)) / 1024));
             mitm::applet::LogLine("applet group: memory %llu/%llu MB, threads %llu/%llu, events %llu/%llu, transfer memories %llu/%llu, sessions %llu/%llu",
                                   static_cast<unsigned long long>(cur[0] >> 20), static_cast<unsigned long long>(lim[0] >> 20),
                                   static_cast<unsigned long long>(cur[1]), static_cast<unsigned long long>(lim[1]),
@@ -838,7 +851,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.13-test3: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.13-test4: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -963,6 +976,25 @@ namespace ams {
             }
         }
         LogMemoryPools();
+        /* v0.7.13 test: config/switch-frame-tap/ballast.txt = N (MB, even) holds
+         * N MB more of the System group from boot on, to reproduce a console
+         * with less memory to spare (#15). Never in a normal install. */
+        {
+            fs::FileHandle f;
+            if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), "sdmc:/config/switch-frame-tap/ballast.txt", fs::OpenMode_Read))) {
+                char b[8] = {};
+                size_t n = 0;
+                static_cast<void>(fs::ReadFile(std::addressof(n), f, 0, b, sizeof(b) - 1));
+                fs::CloseFile(f);
+                const size_t mb = static_cast<size_t>(std::strtoul(b, nullptr, 10)) & ~size_t(1);
+                uintptr_t addr = 0;
+                const Result r1 = mb != 0 ? os::SetMemoryHeapSize(mb << 20) : Result(ResultSuccess());
+                const Result r2 = mb != 0 && R_SUCCEEDED(r1) ? os::AllocateMemoryBlock(std::addressof(addr), mb << 20) : r1;
+                if (addr != 0) { std::memset(reinterpret_cast<void *>(addr), 0, mb << 20); }
+                mitm::applet::LogLine("TEST ballast: %zu MB held from boot (heap rc=0x%x, block rc=0x%x)", mb, r1.GetValue(), r2.GetValue());
+                LogAppletLimits("ballast");
+            }
+        }
         /* v0.7.11: with streaming switched off, the USB port is left to other
          * apps (masagrator) - taken when it is switched on (UsbFollowStreamSwitch) */
         if (mitm::applet::g_stream_enabled.load(std::memory_order_relaxed)) {

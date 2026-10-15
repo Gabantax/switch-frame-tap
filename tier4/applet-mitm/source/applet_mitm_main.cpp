@@ -296,10 +296,40 @@ namespace ams {
             mitm::applet::LogLine("screen: %s (rc=0x%x)", want ? "off while streaming" : "on", r.GetValue());
         }
 
+        /* v0.7.13 test: config/switch-frame-tap/ballast.txt = "N [S]" holds N MB
+         * (even) more of the System group, from boot or from S seconds after
+         * boot, to reproduce a console with less memory to spare (#15) and to
+         * find when am needs it. Never in a normal install. */
+        constinit size_t g_ballast_mb = 0;
+        constinit u32 g_ballast_delay_s = 0;
+        void BallastRead() {
+            fs::FileHandle f;
+            if (R_FAILED(fs::OpenFile(std::addressof(f), "sdmc:/config/switch-frame-tap/ballast.txt", fs::OpenMode_Read))) { return; }
+            char b[16] = {};
+            size_t n = 0;
+            static_cast<void>(fs::ReadFile(std::addressof(n), f, 0, b, sizeof(b) - 1));
+            fs::CloseFile(f);
+            char *e = nullptr;
+            g_ballast_mb = static_cast<size_t>(std::strtoul(b, std::addressof(e), 10)) & ~size_t(1);
+            g_ballast_delay_s = static_cast<u32>(std::strtoul(e, nullptr, 10));
+            mitm::applet::LogLine("TEST ballast: %zu MB, taken %u s after boot", g_ballast_mb, g_ballast_delay_s);
+        }
+        void BallastTake() {
+            if (g_ballast_mb == 0) { return; }
+            uintptr_t addr = 0;
+            const Result r1 = os::SetMemoryHeapSize(g_ballast_mb << 20);
+            const Result r2 = R_SUCCEEDED(r1) ? os::AllocateMemoryBlock(std::addressof(addr), g_ballast_mb << 20) : r1;
+            if (addr != 0) { std::memset(reinterpret_cast<void *>(addr), 0, g_ballast_mb << 20); }
+            mitm::applet::LogLine("TEST ballast: %zu MB held now (heap rc=0x%x, block rc=0x%x)", g_ballast_mb, r1.GetValue(), r2.GetValue());
+            g_ballast_mb = 0;
+            LogAppletLimits("ballast");
+        }
+
         void HeartbeatThread(void *) {
             for (u32 i = 1; ; i++) {
                 for (u32 t = 0; t < 12; ++t) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(250));
+                    if (g_ballast_mb != 0 && armTicksToNs(armGetSystemTick()) >= static_cast<u64>(g_ballast_delay_s) * UINT64_C(1000000000)) { BallastTake(); }
                     LogAppletLimits();
                     ScreenFollowStream();
                 }
@@ -986,25 +1016,8 @@ namespace ams {
             }
         }
         LogMemoryPools();
-        /* v0.7.13 test: config/switch-frame-tap/ballast.txt = N (MB, even) holds
-         * N MB more of the System group from boot on, to reproduce a console
-         * with less memory to spare (#15). Never in a normal install. */
-        {
-            fs::FileHandle f;
-            if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), "sdmc:/config/switch-frame-tap/ballast.txt", fs::OpenMode_Read))) {
-                char b[8] = {};
-                size_t n = 0;
-                static_cast<void>(fs::ReadFile(std::addressof(n), f, 0, b, sizeof(b) - 1));
-                fs::CloseFile(f);
-                const size_t mb = static_cast<size_t>(std::strtoul(b, nullptr, 10)) & ~size_t(1);
-                uintptr_t addr = 0;
-                const Result r1 = mb != 0 ? os::SetMemoryHeapSize(mb << 20) : Result(ResultSuccess());
-                const Result r2 = mb != 0 && R_SUCCEEDED(r1) ? os::AllocateMemoryBlock(std::addressof(addr), mb << 20) : r1;
-                if (addr != 0) { std::memset(reinterpret_cast<void *>(addr), 0, mb << 20); }
-                mitm::applet::LogLine("TEST ballast: %zu MB held from boot (heap rc=0x%x, block rc=0x%x)", mb, r1.GetValue(), r2.GetValue());
-                LogAppletLimits("ballast");
-            }
-        }
+        BallastRead();
+        if (g_ballast_delay_s == 0) { BallastTake(); }
         /* v0.7.11: with streaming switched off, the USB port is left to other
          * apps (masagrator) - taken when it is switched on (UsbFollowStreamSwitch) */
         if (mitm::applet::g_stream_enabled.load(std::memory_order_relaxed)) {

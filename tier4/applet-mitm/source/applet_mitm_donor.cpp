@@ -118,6 +118,7 @@ namespace ams::mitm::applet {
         }
         os::SetThreadNamePointer(std::addressof(g_watch_thread), "applet-mitm.AppletWatch");
         os::StartThread(std::addressof(g_watch_thread));
+        NoteThread(std::addressof(g_watch_thread));
     }
 
     void DonorAccept(u64 size, os::NativeHandle tmem) {

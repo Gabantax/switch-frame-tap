@@ -200,9 +200,6 @@ namespace ams::mitm::applet {
             if (!ok || R_FAILED(fs::RenameFile(tmp, dst))) { static_cast<void>(fs::DeleteFile(tmp)); }
         }
 
-        /* the PNG goes out through this, 128 KB at a time */
-        constexpr size_t OutBufSize = 128_KB;
-        alignas(64) constinit u8 g_out_buf[OutBufSize];
         alignas(64) constinit u8 g_row_buf[1 + 1920 * 3];
 
     }
@@ -215,6 +212,7 @@ namespace ams::mitm::applet {
                                         os::GetThreadPriority(os::GetCurrentThread())));
         os::SetThreadNamePointer(std::addressof(g_input_thread), "applet-mitm.ShotInput");
         os::StartThread(std::addressof(g_input_thread));
+        NoteThread(std::addressof(g_input_thread));
     }
 
     bool ShotRequestPending() { return g_shot_request_tick.load(std::memory_order_relaxed) != 0; }
@@ -227,8 +225,9 @@ namespace ams::mitm::applet {
         return true;
     }
 
-    bool WriteShot(const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra, u32 flip) {
+    bool WriteShot(u8 *out, const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra, u32 flip) {
         if (w == 0 || h == 0 || w > 1920 || h > 1088) { ++g_shot_fail; LogLine("shot: %ux%u is not a size this writes", w, h); return false; }
+        if (out == nullptr) { ++g_shot_fail; LogLine("shot: no capture memory for the PNG"); return false; }
         const u64 t0 = armTicksToNs(armGetSystemTick());
         char path[128];
         MakeShotPath(path, sizeof(path));
@@ -243,7 +242,7 @@ namespace ams::mitm::applet {
         bool io_ok = true;
         auto flush = [&]() {
             if (fill == 0 || !io_ok) { return io_ok; }
-            io_ok = R_SUCCEEDED(fs::WriteFile(f, off, g_out_buf, fill, fs::WriteOption::None));
+            io_ok = R_SUCCEEDED(fs::WriteFile(f, off, out, fill, fs::WriteOption::None));
             off += static_cast<s64>(fill);
             fill = 0;
             return io_ok;
@@ -251,10 +250,10 @@ namespace ams::mitm::applet {
         const bool ok = png::WritePng(w, h, g_row_buf,
             [&](const uint8_t *d, size_t n) {
                 while (n > 0) {
-                    const size_t k = (OutBufSize - fill) < n ? (OutBufSize - fill) : n;
-                    std::memcpy(g_out_buf + fill, d, k);
+                    const size_t k = (ShotOutBufSize - fill) < n ? (ShotOutBufSize - fill) : n;
+                    std::memcpy(out + fill, d, k);
                     fill += k; d += k; n -= k;
-                    if (fill == OutBufSize && !flush()) { return false; }
+                    if (fill == ShotOutBufSize && !flush()) { return false; }
                 }
                 return true;
             },

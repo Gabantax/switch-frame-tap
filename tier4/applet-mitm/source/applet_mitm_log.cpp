@@ -132,4 +132,32 @@ namespace ams::mitm::applet {
         g_defer_len = 0;
     }
 
+
+    namespace {
+        constexpr u32 MaxNoted = 32;
+        constinit const os::ThreadType *g_noted[MaxNoted] = {};
+        constinit u32 g_noted_n = 0;
+    }
+
+    void NoteThread(const os::ThreadType *t) {
+        std::scoped_lock lk(g_lock);
+        for (u32 k = 0; k < g_noted_n; ++k) { if (g_noted[k] == t) { return; } }   /* a thread object made again */
+        if (g_noted_n < MaxNoted) { g_noted[g_noted_n++] = t; }
+    }
+
+    void LogStackUse() {
+        u32 n = 0;
+        { std::scoped_lock lk(g_lock); n = g_noted_n; }
+        for (u32 k = 0; k < n; ++k) {
+            /* the stack as the thread uses it (an aliased stack's original is unmapped) */
+            const size_t size = g_noted[k]->stack_size;
+            const u8 *lo = static_cast<const u8 *>(g_noted[k]->stack);
+            if (lo == nullptr) { continue; }
+            size_t untouched = 0;
+            while (untouched < size && lo[untouched] == 0) { ++untouched; }
+            const char *name = os::GetThreadNamePointer(g_noted[k]);
+            LogLine("stack: %s used %zu of %zu KB", name != nullptr ? name : "?", (size - untouched + 1023) / 1024, size / 1024);
+        }
+    }
+
 }

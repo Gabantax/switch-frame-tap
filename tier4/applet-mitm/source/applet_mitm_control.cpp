@@ -192,6 +192,7 @@ namespace ams::mitm::applet {
                                         os::GetThreadPriority(os::GetCurrentThread())));
         os::SetThreadNamePointer(std::addressof(g_control_thread), "applet-mitm.Control");
         os::StartThread(std::addressof(g_control_thread));
+        NoteThread(std::addressof(g_control_thread));
     }
 
 }

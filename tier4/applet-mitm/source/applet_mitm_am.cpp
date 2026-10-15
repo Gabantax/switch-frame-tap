@@ -100,6 +100,7 @@ namespace ams::mitm::applet {
             .override_pid    = client_pid.GetValue().value,
         ));
         const sf::cmif::DomainObjectId target{serviceGetObjectId(std::addressof(proxy))};
+        LogLine("am: the app's proxy is am's object %u (our table %zu)", static_cast<unsigned>(target.value), AmServerOptions::MaxDomainObjects);   /* v0.7.13: how high am's ids run */
         auto fwd = MakeForward(proxy);
         PendForward(fwd);
         out.SetValue(sf::CreateSharedObjectEmplaced<IAmProxyMitm, AmProxyMitm>(decltype(fwd)(fwd), m_client_info), target);
@@ -161,6 +162,7 @@ namespace ams::mitm::applet {
             }
             os::SetThreadNamePointer(std::addressof(g_am_threads[i]), "applet-mitm.Am");
             os::StartThread(std::addressof(g_am_threads[i]));
+            NoteThread(std::addressof(g_am_threads[i]));
         }
         LogLine("am: appletOE wrapped - a browser applet stops the stream before it starts");
     }

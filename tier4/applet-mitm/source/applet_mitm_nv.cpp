@@ -177,6 +177,7 @@ namespace ams::mitm::applet {
         constinit u8       *g_vic_dst_buf = nullptr;
         constinit u8       *g_vic_src_buf = nullptr;
         constinit u8       *g_ind_buf     = nullptr;
+        constinit u8       *g_shot_out    = nullptr;   /* v0.7.13: ShotOutBufSize past g_ind_size */
         /* cached heap past the nvmap'd block-row, used to stage uncached engine
          * output before it goes to the filesystem */
         constinit u8       *g_stage_buf   = nullptr;
@@ -232,6 +233,7 @@ namespace ams::mitm::applet {
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
             g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x350000);
             g_ind_buf = nullptr;
+            g_shot_out = nullptr;
             g_ind_size = 0;
             g_stage_buf = nullptr;
             g_stream_stage[0] = g_stream_stage[1] = nullptr;
@@ -342,6 +344,7 @@ namespace ams::mitm::applet {
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
             g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x350000);
             g_ind_buf = nullptr;
+            g_shot_out = nullptr;
             g_ind_size = 0;
             g_stage_buf = nullptr;
             g_stream_stage[0] = g_stream_stage[1] = nullptr;
@@ -365,9 +368,10 @@ namespace ams::mitm::applet {
             if (g_ind_buf != nullptr) { return true; }
             if (g_vic_heap == 0) { return false; }
             if (g_donor_mode) {
-                const size_t cap = g_vic_heap_size - VicBaseHeap;
+                const size_t cap = g_vic_heap_size - VicBaseHeap - ShotOutBufSize;
                 g_ind_buf  = reinterpret_cast<u8 *>(g_vic_heap + VicBaseHeap);
                 g_ind_size = cap;
+                g_shot_out = g_ind_buf + cap;   /* v0.7.13: the screenshot PNG's buffer, past the stream's */
                 g_stage_buf = g_ind_buf + FbBlockRowStage;
                 g_stream_stage[0] = g_stage_buf + StreamStageSize;
                 g_stream_stage[1] = g_stream_stage[0] + StreamStageSize;
@@ -382,15 +386,17 @@ namespace ams::mitm::applet {
                 if (R_SUCCEEDED(os::SetMemoryHeapSize(sz))) { total = sz; break; }
             }
             if (total == 0) { LogLine("   %s: capture memory: no heap size accepted - the Applet pool is short (an applet open?)", who); return false; }
-            const size_t cap = total - VicBaseHeap;
+            const size_t block = total - VicBaseHeap;
+            const size_t cap = block - ShotOutBufSize;
             uintptr_t addr = 0;
-            if (const auto rc = os::AllocateMemoryBlock(std::addressof(addr), cap); R_FAILED(rc)) {
+            if (const auto rc = os::AllocateMemoryBlock(std::addressof(addr), block); R_FAILED(rc)) {
                 LogLine("   %s: capture memory: AllocateMemoryBlock(%zu MB) rc=0x%x", who, cap / (1024 * 1024), rc.GetValue());
                 static_cast<void>(os::SetMemoryHeapSize(VicBaseHeap));
                 return false;
             }
             g_ind_buf  = reinterpret_cast<u8 *>(addr);
             g_ind_size = cap;
+            g_shot_out = g_ind_buf + cap;
             g_stage_buf = g_ind_buf + FbBlockRowStage;
             g_stream_stage[0] = g_stage_buf + StreamStageSize;
             g_stream_stage[1] = g_stream_stage[0] + StreamStageSize;
@@ -415,16 +421,18 @@ namespace ams::mitm::applet {
             if (g_donor_mode) {
                 /* the donor's memory stays mapped (experiment 1) */
                 g_ind_buf = nullptr;
+                g_shot_out = nullptr;
                 g_ind_size = 0;
                 g_stage_buf = nullptr;
                 g_stream_stage[0] = g_stream_stage[1] = nullptr;
                 LogLine("   %s: capture memory (donor) released", who);
                 return;
             }
-            os::FreeMemoryBlock(reinterpret_cast<uintptr_t>(g_ind_buf), g_ind_size);
+            os::FreeMemoryBlock(reinterpret_cast<uintptr_t>(g_ind_buf), g_ind_size + ShotOutBufSize);
             const auto rc = os::SetMemoryHeapSize(VicBaseHeap);
             LogLine("   %s: capture memory given back (%zu MB), heap back to %zu MB rc=0x%x", who, g_ind_size / (1024 * 1024), VicBaseHeap / (1024 * 1024), rc.GetValue());
             g_ind_buf = nullptr;
+            g_shot_out = nullptr;
             g_ind_size = 0;
             g_stage_buf = nullptr;
             g_stream_stage[0] = g_stream_stage[1] = nullptr;
@@ -1914,6 +1922,7 @@ namespace ams::mitm::applet {
             g_vic_heap_size = 0;
             g_vic_cfg_buf = g_vic_cmd_buf = g_vic_dst_buf = g_vic_src_buf = nullptr;
             g_ind_buf = nullptr;
+            g_shot_out = nullptr;
             g_ind_size = 0;
             g_stage_buf = nullptr;
             g_stream_stage[0] = g_stream_stage[1] = nullptr;
@@ -6270,7 +6279,7 @@ namespace ams::mitm::applet {
             const u32 shown = s.size_check_ok ? (s.src.w << 16 | s.src.h) : NvfSession::PresentRect(s.src, s.cap_crop);   /* v0.7.13: what the game shows */
             const u32 w = s.corner ? NvfW : shown >> 16, h = s.corner ? NvfH : shown & 0xFFFF;
             const size_t n = s.CornerFast() ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
-            return WriteShot(g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8, s.present_flip);
+            return WriteShot(g_shot_out, g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8, s.present_flip);
         }
 
         bool ShotStandalone() {
@@ -8013,6 +8022,7 @@ namespace ams::mitm::applet {
                                         g_vic_stack, sizeof(g_vic_stack), worker_prio));
         os::SetThreadNamePointer(std::addressof(g_vic_thread), "applet-mitm.VIC");
         os::StartThread(std::addressof(g_vic_thread));
+        NoteThread(std::addressof(g_vic_thread));
         g_vic_stage.store("waiting", std::memory_order_relaxed);
         LogLine("VIC worker started (execute=%s)", g_vic_execute ? "PhaseB-full-blit" : "PhaseA-noop-cmdbuf");
     }

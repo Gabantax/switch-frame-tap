@@ -43,10 +43,11 @@ namespace ams {
 
     namespace {
 
-        /* v0.7.13: 256 KB, was 1 MB - every custom sysmodule shares a few MB
+        /* v0.7.13: 128 KB, was 1 MB - every custom sysmodule shares a few MB
          * of the System group with am (#15), and the most ever in use was
-         * 17 KB (Run v0713-ballast4-late: a game, the HOME menu, applets) */
-        constexpr size_t MallocBufferSize = 256_KB;
+         * 17 KB (Run v0713-ballast4-late: a game, the HOME menu, applets),
+         * plus SyncSoundPatches' 44 KB for a moment at boot */
+        constexpr size_t MallocBufferSize = 128_KB;
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];
 
         enum PortIndex {
@@ -203,6 +204,7 @@ namespace ams {
                                                 g_nv_stacks[i], sizeof(g_nv_stacks[i]), prio));
                 os::SetThreadNamePointer(std::addressof(g_nv_threads[i]), "applet-mitm.NvDrv");
                 os::StartThread(std::addressof(g_nv_threads[i]));
+                mitm::applet::NoteThread(std::addressof(g_nv_threads[i]));
             }
         }
 
@@ -390,6 +392,8 @@ namespace ams {
                 for (u32 t = 0; t < 12; ++t) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(250));
                     if (g_ballast_mb != 0 && armTicksToNs(armGetSystemTick()) >= static_cast<u64>(g_ballast_delay_s) * UINT64_C(1000000000)) { BallastTake(); }
+                    /* v0.7.13: the stacks' high-water marks, 2 and 10 minutes in, then hourly */
+                    if (t == 0 && (i == 40 || i == 200 || (i > 200 && i % 1200 == 0))) { mitm::applet::LogStackUse(); }
                     LogAppletLimits();
                     ScreenFollowStream();
                 }
@@ -419,13 +423,18 @@ namespace ams {
             if (R_FAILED(fs::GetEntryType(std::addressof(t), Ours)) || t != fs::DirectoryEntryType_Directory) { return; }
             fs::DirectoryHandle d;
             if (R_FAILED(fs::OpenDirectory(std::addressof(d), Bundled, fs::OpenDirectoryMode_File))) { return; }
-            static fs::DirectoryEntry entries[48];
+            /* v0.7.13: from malloc for this moment at boot, not 44 KB of .bss
+             * (the System group, #15) */
+            struct Scratch { fs::DirectoryEntry entries[48]; u8 a[4096], b[4096]; };
+            std::unique_ptr<Scratch> scratch(new (std::nothrow) Scratch);
+            if (!scratch) { fs::CloseDirectory(d); return; }
+            fs::DirectoryEntry *entries = scratch->entries;
             s64 n = 0;
             const Result rr = fs::ReadDirectory(std::addressof(n), entries, d, 48);
             fs::CloseDirectory(d);
             if (R_FAILED(rr)) { return; }
             u32 updated = 0, same = 0;
-            static u8 a[4096], b[4096];
+            u8 *a = scratch->a, *b = scratch->b;
             auto read_all = [](const char *path, u8 *buf, size_t cap, size_t *len) -> bool {
                 fs::FileHandle f;
                 if (R_FAILED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Read))) { return false; }
@@ -444,8 +453,8 @@ namespace ams {
                 std::snprintf(from, sizeof(from), "%s/%s", Bundled, name);
                 std::snprintf(to, sizeof(to), "%s/%s", Ours, name);
                 size_t la = 0, lb = 0;
-                if (!read_all(from, a, sizeof(a), std::addressof(la))) { continue; }
-                if (read_all(to, b, sizeof(b), std::addressof(lb)) && la == lb && std::memcmp(a, b, la) == 0) { ++same; continue; }
+                if (!read_all(from, a, sizeof(scratch->a), std::addressof(la))) { continue; }
+                if (read_all(to, b, sizeof(scratch->b), std::addressof(lb)) && la == lb && std::memcmp(a, b, la) == 0) { ++same; continue; }
                 fs::DeleteFile(to);
                 fs::FileHandle f;
                 if (R_SUCCEEDED(fs::CreateFile(to, static_cast<s64>(la))) && R_SUCCEEDED(fs::OpenFile(std::addressof(f), to, fs::OpenMode_Write))) {
@@ -952,7 +961,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.13-test8: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.13-test9: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1100,6 +1109,7 @@ namespace ams {
                                         os::GetThreadPriority(os::GetCurrentThread())));
         os::SetThreadNamePointer(std::addressof(g_hb_thread), "applet-mitm.HB");
         os::StartThread(std::addressof(g_hb_thread));
+        mitm::applet::NoteThread(std::addressof(g_hb_thread));
         mitm::applet::LogMark("main:heartbeat_started");
 
         mitm::applet::StartControlService();
@@ -1157,6 +1167,7 @@ namespace ams {
                                                 g_vi_stacks[i], sizeof(g_vi_stacks[i]), prio));
                 os::SetThreadNamePointer(std::addressof(g_vi_threads[i]), "applet-mitm.Vi");
                 os::StartThread(std::addressof(g_vi_threads[i]));
+                mitm::applet::NoteThread(std::addressof(g_vi_threads[i]));
             }
             mitm::applet::LogLine("vi server: %zu threads, %zu sessions", ViThreads, MaxSessions);
         }

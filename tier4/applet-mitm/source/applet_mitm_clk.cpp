@@ -321,6 +321,7 @@ namespace ams::mitm::applet {
                                         g_clk_stack, sizeof(g_clk_stack), prio));
         os::SetThreadNamePointer(std::addressof(g_clk_thread), "applet-mitm.Clk");
         os::StartThread(std::addressof(g_clk_thread));
+        NoteThread(std::addressof(g_clk_thread));
         LogLine("clock survey armed: fires at uptime ~%u s, %s", g_probe_delay_s > 20 ? g_probe_delay_s - 10 : g_probe_delay_s,
                 keep_holding ? "then HOLDS the clocks for this run's engine probes" : "then releases");
     }

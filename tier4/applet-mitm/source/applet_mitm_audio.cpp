@@ -115,6 +115,7 @@ namespace ams::mitm::applet {
                                         os::GetThreadPriority(os::GetCurrentThread())));
         os::SetThreadNamePointer(std::addressof(g_audio_thread), "applet-mitm.Audio");
         os::StartThread(std::addressof(g_audio_thread));
+        NoteThread(std::addressof(g_audio_thread));
     }
 
     size_t AudioTake(u8 *dst, size_t max) {

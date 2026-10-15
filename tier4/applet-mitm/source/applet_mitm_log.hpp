@@ -125,4 +125,11 @@ namespace ams::mitm::applet {
         }
     }
 
+
+    /* v0.7.13: each thread's stack, to log how much of it was ever used
+     * (LogStackUse) - the stacks are zeroed .bss, so the deepest byte not
+     * zero is the high-water mark. For sizing them down (#15). */
+    void NoteThread(const os::ThreadType *t);
+    void LogStackUse();
+
 }

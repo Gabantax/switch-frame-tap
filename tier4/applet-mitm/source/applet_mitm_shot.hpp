@@ -36,6 +36,9 @@ namespace ams::mitm::applet {
 
     /* the visible w x h of a block-linear A8B8G8R8 surface -> PNG */
     /* flip: bit 0 mirror horizontally, bit 1 vertically (v0.4.1: the present's transform) */
-    bool WriteShot(const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra = false, u32 flip = 0);
+    /* v0.7.13: out (ShotOutBufSize) is the PNG's write buffer - the end of the
+     * capture region, not 128 KB of the System group held for the boot */
+    constexpr size_t ShotOutBufSize = 128 * 1024;
+    bool WriteShot(u8 *out, const u8 *src, size_t src_size, u32 w, u32 h, u32 stride_bytes, u32 bh_log2, bool bgra = false, u32 flip = 0);
 
 }

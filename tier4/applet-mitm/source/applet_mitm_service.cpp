@@ -390,6 +390,7 @@ namespace ams::mitm::applet {
                                         os::GetThreadPriority(os::GetCurrentThread())));
         os::SetThreadNamePointer(std::addressof(g_app_watch_thread), "applet-mitm.AppWatch");
         os::StartThread(std::addressof(g_app_watch_thread));
+        NoteThread(std::addressof(g_app_watch_thread));
     }
 
     Result ForwardGetDisplayService(::Service *fwd, u32 cmd, u32 mode, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out) {

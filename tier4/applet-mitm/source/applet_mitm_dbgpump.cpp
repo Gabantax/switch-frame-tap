@@ -211,6 +211,7 @@ namespace ams::mitm::applet {
                 if (g_helper_ok[i]) {
                     os::SetThreadNamePointer(std::addressof(g_helper_thread[i]), "applet-mitm.DbgCore");
                     os::StartThread(std::addressof(g_helper_thread[i]));
+                    NoteThread(std::addressof(g_helper_thread[i]));
                 } else {
                     LogLine("   debug pump: helper on core %u not created rc=0x%x - its continues run on core 3", i, rc.GetValue());
                 }
@@ -223,6 +224,7 @@ namespace ams::mitm::applet {
             }
             os::SetThreadNamePointer(std::addressof(g_pump_thread), "applet-mitm.DbgPump");
             os::StartThread(std::addressof(g_pump_thread));
+            NoteThread(std::addressof(g_pump_thread));
             g_pump_ok = true;
             LogLine("   debug pump: running on core 3; helpers on cores 0/1/2: %s/%s/%s",
                     g_helper_ok[0] ? "yes" : "NO", g_helper_ok[1] ? "yes" : "NO", g_helper_ok[2] ? "yes" : "NO");

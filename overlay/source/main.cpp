@@ -238,7 +238,7 @@ namespace {
     class MainGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.7.13-test1");
+                auto *frame = new tsl::elm::OverlayFrame("Switch Frame Tap", "v0.7.13-test2");
                 auto *list = new tsl::elm::List();
 
                 list->addItem(new tsl::elm::CategoryHeader("Stream to PC"));
@@ -260,11 +260,14 @@ namespace {
                 });
                 list->addItem(m_app);
                 {
+                    /* libtesla keeps sdmc unmounted: mount it around each access
+                     * (v0.7.13-test2: the setting was applied but never saved) */
                     std::string v;
-                    const bool on = sftini::Get("screen_off", &v) && v == "1";
+                    bool on = false;
+                    tsl::hlp::doWithSDCardHandle([&] { on = sftini::Get("screen_off", &v) && v == "1"; });
                     auto *scr = new tsl::elm::ToggleListItem("Screen off while streaming", on);
                     scr->setStateChangedListener([](bool on) {
-                        sftini::Set("screen_off", on ? "1" : "0");
+                        tsl::hlp::doWithSDCardHandle([&] { sftini::Set("screen_off", on ? "1" : "0"); });
                         SftapSetScreenOff(on);
                     });
                     list->addItem(scr);

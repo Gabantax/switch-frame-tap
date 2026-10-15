@@ -5910,12 +5910,6 @@ namespace ams::mitm::applet {
                              && (cw * 9 > ch * 16 ? cw * 9 - ch * 16 : ch * 16 - cw * 9) <= cw * 9 / 50;
                 return ok ? crop : (d.w << 16 | d.h);
             }
-            /* v0.7.13: more than 1280x720 of it is shown (SMO docked: 1600x900) -
-             * the stream goes to 1080p, the VIC scaling that part up */
-            static bool PresentBig(const SrcDesc &d) {
-                const u32 r = PresentRect(d);
-                return (r >> 16) > NvfW || (r & 0xFFFF) > NvfH;
-            }
             void CropToPresent(SrcDesc &d) {
                 const u32 use = PresentRect(d);
                 if (use != crop_used) {
@@ -6517,12 +6511,12 @@ namespace ams::mitm::applet {
             u32 uvc_w = 0, uvc_h = 0;
             if (uvc) { UvcFrameSize(std::addressof(uvc_w), std::addressof(uvc_h)); g_uvc_new_consumer.store(false, std::memory_order_relaxed); }
             const bool fits1080 = g_ind_size >= NvfArenaBase + Layout1080().arena_size_pipe;
-            /* v0.7.13: a surface other than 1920x1080 follows the part the game
-             * shows - more than 1280x720 of it streams at 1080p */
-            const bool other1080 = live && !uvc && !s.size_check_ok && !g_cap720_armed && fits1080;
-            const bool big_other = other1080 && NvfSession::PresentBig(s.src);
+            /* v0.7.13: a surface other than 1920x1080 stays at 720p even when
+             * more than 1280x720 of it is shown - SMO docked (1600x900, dynamic
+             * resolution below that) at 1080p looked no better than 720p at the
+             * same bitrate, and cost fps and a frame of latency (Run v0713-smo2) */
             const bool full1080 = uvc ? (uvc_w == 1920 && fits1080)
-                                      : ((!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080) || big_other);
+                                      : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080);
             if (uvc && uvc_w == 1920 && !fits1080) { LogLine("   nvstream: webcam asked for 1080p but the capture region is too small - sending 720p"); }
             u32 uvc_drops = uvc ? UvcDroppedCount() : 0;
             s.lay = full1080 ? std::addressof(Layout1080()) : nullptr;
@@ -6535,7 +6529,7 @@ namespace ams::mitm::applet {
             const bool pipe = full1080;
             s.arena_size = pipe ? L.arena_size_pipe : (gop != 0 ? L.arena_size_p : L.arena_size);   /* same base: past both stream stages */
             LogLine("   nvstream: encoding %ux%u%s%s%s", L.w, L.h, uvc ? " for the webcam" : "",
-                    big_other ? " (the VIC scales the game's picture up; 1920x1088 coded, SPS-cropped)" : full1080 ? " (1920x1088 coded, SPS-cropped)" : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture)"),
+                    full1080 ? " (1920x1088 coded, SPS-cropped)" : (s.corner ? " (the handheld picture, 1:1)" : " (the VIC scales the picture)"),
                     pipe ? "; pipelined: the next frame is read while this one encodes" : "");
             if (!s.Open(vfd, nvmap_fd, cmd_handle, vsyncpt, cfg_addr, "nvstream")) { VicStage("ns:open_FAILED"); return g_engine_wedged ? StreamEnd::EngineStall : StreamEnd::Failed; }
             if (live) {
@@ -6611,8 +6605,6 @@ namespace ams::mitm::applet {
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
             SizeCheck size_check(s.corner);   /* v0.7.8: the 720p/1080p check, shared with the webcam */
-            u64 big_next_ns = 0;
-            u32 big_flips = 0;
             /* v0.6: the experiment's window (one variant) */
             u64 ab_bytes_p = 0, ab_bytes_i = 0, ab_intra = 0, ab_inter = 0, ab_qp = 0, ab_t0 = armTicksToNs(armGetSystemTick());
             u32 ab_np = 0, ab_ni = 0, ab_frames = 0, ab_window = 0;
@@ -6989,24 +6981,6 @@ namespace ams::mitm::applet {
                         break;
                     }
                 }
-                /* v0.7.13: the same for a surface other than 1920x1080, from the
-                 * part the game shows (SMO: 1280x720 handheld, 1600x900 docked),
-                 * every 250 ms, after two checks in a row */
-                if (other1080) {
-                    const u64 now = armTicksToNs(armGetSystemTick());
-                    if (now >= big_next_ns) {
-                        big_next_ns = now + UINT64_C(250000000);
-                        big_flips = NvfSession::PresentBig(s.src) != big_other ? big_flips + 1 : 0;
-                        if (big_flips >= 2) {
-                            ++size_changes;
-                            why = big_other ? "the game switched to a 720p picture (it shows 1280x720 or less)"
-                                            : "the game switched to a bigger picture than 720p - streaming at 1080p";
-                            end = StreamEnd::Reconfigure;
-                            break;
-                        }
-                    }
-                }
-
                 /* every ~10 s (~60 s live): the clock (re-ensured if it fell)
                  * and a progress line, so a stream that dies midway says how
                  * far it got */

@@ -65,6 +65,15 @@ namespace ams::mitm::applet {
             LogPath  = "sdmc:/config/switch-frame-tap/log.txt";
             LastPath = "sdmc:/config/switch-frame-tap/last.txt";
         }
+        /* v0.7.13: the previous boot's log and breadcrumb are kept beside
+         * (log.prev.txt, last.prev.txt) - after a crash or a hang the console
+         * is rebooted, and the boot that went wrong is the one wanted */
+        if (g_release_mode) {
+            static_cast<void>(fs::DeleteFile("sdmc:/config/switch-frame-tap/log.prev.txt"));
+            static_cast<void>(fs::RenameFile(LogPath, "sdmc:/config/switch-frame-tap/log.prev.txt"));
+            static_cast<void>(fs::DeleteFile("sdmc:/config/switch-frame-tap/last.prev.txt"));
+            static_cast<void>(fs::RenameFile(LastPath, "sdmc:/config/switch-frame-tap/last.prev.txt"));
+        }
         /* truncate */
         fs::DeleteFile(LogPath);
         fs::CreateFile(LogPath, 0);

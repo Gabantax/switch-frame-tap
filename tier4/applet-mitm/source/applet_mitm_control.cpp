@@ -128,7 +128,7 @@ namespace ams::mitm::applet {
         constinit os::ThreadType g_control_thread;
 
         void ControlThread(void *) {
-            g_control_manager.LoopProcess();
+            LoopProcessSafely(g_control_manager, "sftap");
         }
 
     }

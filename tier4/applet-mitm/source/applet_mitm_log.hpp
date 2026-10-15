@@ -108,4 +108,21 @@ namespace ams::mitm::applet {
     void UsbFollowStreamSwitch();
     void NoteUsbLeftAlone();
 
+
+    /* v0.7.13: ServerManager::LoopProcess aborts the whole module when one
+     * request cannot be handled - accepting one session more than a manager
+     * has room for is enough - and the module going down takes every vi
+     * client with it: a black screen until the power button. This loop logs
+     * it and carries on: that one client is turned away, the console keeps
+     * going (BigBro030, GBAtemp: apps launched one after another). */
+    template<typename Manager>
+    void LoopProcessSafely(Manager &m, const char *who) {
+        u32 failures = 0;
+        while (auto *h = m.WaitSignaled()) {
+            if (const Result r = m.Process(h); R_FAILED(r)) {
+                if (++failures <= 20) { LogLine("%s: a request could not be handled (rc=0x%x) - turned away, still running", who, r.GetValue()); }
+            }
+        }
+    }
+
 }

@@ -87,7 +87,7 @@ namespace ams {
         constexpr size_t ViThreads = 4;     /* this one and three more */
         alignas(os::ThreadStackAlignment) constinit u8 g_vi_stacks[ViThreads - 1][32_KB];
         constinit os::ThreadType g_vi_threads[ViThreads - 1];
-        void ViLoopThread(void *) { g_server_manager.LoopProcess(); }
+        void ViLoopThread(void *) { mitm::applet::LoopProcessSafely(g_server_manager, "vi"); }
 
         /* ---- M72: the grc recorder's own server --------------------------
          * Separate from vi:u on purpose. Anything forwarded for grc can block
@@ -952,7 +952,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.13-test7: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.13-test8: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1170,7 +1170,7 @@ namespace ams {
         }
         LogAppletLimits("after sm released");
         mitm::applet::LogMark("main:LoopProcess");
-        g_server_manager.LoopProcess();
+        mitm::applet::LoopProcessSafely(g_server_manager, "vi");
         mitm::applet::LogMark("main:LoopProcess_RETURNED");
     }
 

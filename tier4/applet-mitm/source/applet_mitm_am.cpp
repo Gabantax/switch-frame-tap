@@ -54,12 +54,12 @@ namespace ams::mitm::applet {
          * buffer must be at least am's (smaller aborts too). */
         struct AmServerOptions {
             static constexpr size_t PointerBufferSize   = 0x1000;
-            static constexpr size_t MaxDomains          = 4;
+            static constexpr size_t MaxDomains          = 8;   /* v0.7.13: 4 - two apps' worth of headroom more */
             static constexpr size_t MaxDomainObjects    = 0x1000;
             static constexpr bool CanDeferInvokeRequest = false;
             static constexpr bool CanManageMitmServers  = true;
         };
-        constexpr size_t AmMaxSessions = 4;
+        constexpr size_t AmMaxSessions = 8;   /* v0.7.13: was 4, with no room past it (see LoopProcessSafely) */
 
         class AmServerManager final : public sf::hipc::ServerManager<PortIndex_Count, AmServerOptions, AmMaxSessions> {
             private:
@@ -73,13 +73,16 @@ namespace ams::mitm::applet {
         constexpr size_t AmThreads = 2;
         alignas(os::ThreadStackAlignment) constinit u8 g_am_stacks[AmThreads][16_KB];
         constinit os::ThreadType g_am_threads[AmThreads];
-        void AmLoopThread(void *) { g_am_server_manager.LoopProcess(); }
+        void AmLoopThread(void *) { LoopProcessSafely(g_am_server_manager, "am"); }
 
         Result AmServerManager::OnNeedsToAccept(int port_index, Server *server) {
             std::shared_ptr<::Service> fsrv;
             sm::MitmProcessInfo client_info;
             server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
             AMS_ABORT_UNLESS(port_index == PortIndex_AppletOe);
+            /* v0.7.13: one line an app start - a slow leak would show here */
+            static u32 s_accepted = 0;
+            LogLine("am: appletOE of program %016llx wrapped (%u this boot)", static_cast<unsigned long long>(client_info.program_id.value), ++s_accepted);
             R_RETURN(this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<IAmOeMitm, AmOeMitm>(decltype(fsrv)(fsrv), client_info), fsrv));
         }
 

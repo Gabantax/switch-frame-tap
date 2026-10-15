@@ -36,6 +36,7 @@ void __appInit(void) {
 void __appExit(void) { smExit(); }
 
 void Launcher(void);   /* launcher.c (v0.7.13) */
+bool Running(u64 tid);
 
 #define SFT_TID 0x0100000000000C20ull
 
@@ -45,15 +46,14 @@ int main(int argc, char **argv) {
      * the module not running: start the module once the system has booted.
      * Started by the module while a viewer connects: lend it the memory. */
     if (R_SUCCEEDED(pmdmntInitialize())) {
-        u64 pid = 0;
         const bool at_boot = armTicksToNs(armGetSystemTick()) < 15000000000ull;
-        bool sft = R_SUCCEEDED(pmdmntGetProcessId(&pid, SFT_TID));
+        bool sft = Running(SFT_TID);
         /* at boot, a module from an older install's own boot2.flag gives the
          * start to this program and exits within a moment - let it; if it
          * stays (an older module without that), leave it alone */
         for (int i = 0; at_boot && sft && i < 40; ++i) {
             svcSleepThread(250000000ull);
-            sft = R_SUCCEEDED(pmdmntGetProcessId(&pid, SFT_TID));
+            sft = Running(SFT_TID);
         }
         if (!sft) { Launcher(); }
         pmdmntExit();

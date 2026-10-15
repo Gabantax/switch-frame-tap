@@ -27,9 +27,13 @@
 
 static u64 UptimeMs(void) { return armTicksToNs(armGetSystemTick()) / 1000000ull; }
 
-static bool Running(u64 tid) {
+/* pm:dmnt GetProcessId by its id on 5.0.0+ (2). Not libnx's
+ * pmdmntGetProcessId: this program skips libnx's usual start-up, so the
+ * firmware version is unknown and libnx would send the pre-5.0 id - which is
+ * HookToCreateProcess now (test6: the donor took itself for the launcher). */
+bool Running(u64 tid) {
     u64 pid = 0;
-    return R_SUCCEEDED(pmdmntGetProcessId(&pid, tid));
+    return R_SUCCEEDED(serviceDispatchInOut(pmdmntGetServiceSession(), 2, tid, pid)) && pid != 0;
 }
 
 /* the System group's memory (Atmosphère's pm:dmnt extension) */

@@ -987,6 +987,7 @@ static void act_mute(int mute)
 
 static void act_hwdec(int on)
 {
+    if (on == g_hwdec) return;         /* v0.7.13: the choice already made - no decoder restart */
     g_hwdec = on;
     g_dec_reopen = 1;
     prefs_save();

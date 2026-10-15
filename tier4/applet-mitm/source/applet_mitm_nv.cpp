@@ -1472,6 +1472,7 @@ namespace ams::mitm::applet {
     constinit u32 g_early_collect = 1;
     constinit std::atomic<u32> g_queue_transform{0};
     constinit std::atomic<u32> g_queue_crop_wh{0};
+    constinit std::atomic<bool> g_queue_crop_origin0{true};
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
     constinit PresentRec g_present_ring[PresentRingSize] = {};
@@ -5892,9 +5893,37 @@ namespace ams::mitm::applet {
                                : "the VIC scales it to 1280x720");
             }
 
+            /* v0.7.13: a surface other than 1920x1080 - the VIC samples only
+             * what the game presents. Super Mario Odyssey draws into 1600x900
+             * and presents its top-left 1280x720 in handheld (the whole 1600x900
+             * docked); scaling the whole surface left the picture in the top-left
+             * 80% of the stream (creeper3010, #7). Followed on every frame, so a
+             * docked/handheld switch follows too. Only a 16:9 crop from (0,0)
+             * that fits the surface: 1920x1080 surfaces keep the size check
+             * (Smash presents 1280x720 while drawing 1920x1080). */
+            u32 crop_used = 0;
+            void CropToPresent(SrcDesc &d) {
+                const u32 crop = g_queue_crop_wh.load(std::memory_order_relaxed);
+                const u32 cw = crop >> 16, ch = crop & 0xFFFF;
+                const bool ok = crop != 0 && g_queue_crop_origin0.load(std::memory_order_relaxed)
+                             && cw >= 320 && ch >= 180 && cw <= d.w && ch <= d.h
+                             && (cw * 9 > ch * 16 ? cw * 9 - ch * 16 : ch * 16 - cw * 9) <= cw * 9 / 50;
+                const u32 use = ok ? crop : (d.w << 16 | d.h);
+                if (use != crop_used) {
+                    if (crop_used != 0 || use != (d.w << 16 | d.h)) {
+                        LogLine("   nvf: the game presents %ux%u of its %ux%u picture - the VIC %s", use >> 16, use & 0xFFFF, d.w, d.h,
+                                use == (d.w << 16 | d.h) ? "converts all of it" : "converts only that part");
+                    }
+                    crop_used = use;
+                }
+                d.rect_w = use >> 16;
+                d.rect_h = use & 0xFFFF;
+            }
+
             /* RGB -> BT.709 NV12, 16-row block-linear, into the arena */
             bool Vic(const char *stage, u32 cur = 0) {
                 g_strip_src = src;
+                if (!size_check_ok) { CropToPresent(g_strip_src); }
                 g_strip_out = Lay().out;
                 g_strip_flip = present_flip;
                 ON_SCOPE_EXIT { g_strip_flip = 0; };

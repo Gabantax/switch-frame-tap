@@ -189,6 +189,7 @@ namespace ams::mitm::applet {
             {
                 const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
                 g_queue_crop_wh.store((cw > 0 && chh > 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
+                g_queue_crop_origin0.store(crop[0] == 0 && crop[1] == 0, std::memory_order_relaxed);
                 /* v0.7.9: this game's crop follows its mode (it has shown a
                  * whole 1920x1080 picture) - the size check trusts it */
                 if (cw >= 1920 && chh >= 1080) { g_crop_full_pid.store(g_app_pid.load(std::memory_order_relaxed), std::memory_order_relaxed); }

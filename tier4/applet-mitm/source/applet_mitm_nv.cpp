@@ -7147,12 +7147,12 @@ namespace ams::mitm::applet {
             }
             DebugPumpLogStats("nvstream");
             if (size_changes != 0) { LogLine("   nvstream: ended to restart at the game's new picture size"); }
+            if (key_requests != 0) { LogLine("   nvstream: %u keyframe(s) the viewer asked for (a new decoder, a recording)", key_requests); }
             /* M85: the drift test's reference - the VIC's picture of the last
              * frame that went out, and which frame that was. Only when that
              * frame is also the last one the VIC converted. */
             if (!live && !stalled && last_sent != ~0u && last_sent == last_vic) {
                 LogLine("   nvstream: last frame sent #%u, %s, %u frame(s) after its IDR", last_sent, last_pos == 0 ? "IDR" : "P", last_pos);
-                if (key_requests != 0) { LogLine("   nvstream: %u keyframe(s) the viewer asked for", key_requests); }
                 /* M94: pipelined, the last frame's picture is in the buffer its
                  * frame number picked */
                 const u32 kk = pipe ? (last_sent & 1) : 0;

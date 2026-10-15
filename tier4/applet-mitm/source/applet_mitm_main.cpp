@@ -247,6 +247,16 @@ namespace ams {
                 const s64 v = static_cast<s64>(scur >> 18);   /* 256 KB steps */
                 if (v != last_sys) { moved = true; last_sys = v; }
             }
+            /* v0.7.13: the most of the 1 MB malloc buffer ever in use, in 16 KB
+             * steps - how small it can be made */
+            {
+                static size_t low = ~size_t(0);
+                const size_t fr = init::GetAllocator()->GetTotalFreeSize();
+                if (fr + 16_KB <= low || (tag != nullptr && fr < low)) {
+                    low = fr;
+                    mitm::applet::LogLine("malloc: at most %zu KB of %zu KB in use so far", (MallocBufferSize - low) / 1024, MallocBufferSize / 1024);
+                }
+            }
             if (!moved && tag == nullptr) { return; }
             if (tag != nullptr) { mitm::applet::LogLine("applet group @ %s:", tag); }
             mitm::applet::LogLine("system group: memory %llu/%llu KB used (%lld KB free)",

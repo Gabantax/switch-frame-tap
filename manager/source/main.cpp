@@ -8,7 +8,8 @@
  *    told to reload (sftap command 2): a stream in progress restarts with it.
  *  - Stream on/off goes through sftap (command 1) when the sysmodule runs,
  *    else the file it reads at boot (stream-off).
- *  - Start with the console: the sysmodule's flags/boot2.flag.
+ *  - Start with the console: the launcher's flags/boot2.flag (v0.7.13: the
+ *    donor, C21, starts the sysmodule once the system has booted).
  *
  * SDL2 for drawing, the console's own shared fonts through SDL2_ttf, libnx
  * pad/touch for input.
@@ -33,11 +34,16 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.7.13-test5";
+    constexpr const char *AppVersion  = "0.7.13-test6";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
-    constexpr const char *BootFlag    = "sdmc:/atmosphere/contents/0100000000000C20/flags/boot2.flag";
+    /* v0.7.13: the launcher (the donor, C21) holds the boot flag and starts the
+     * sysmodule once the system has booted; C20's own flag is an older install's */
+    constexpr const char *BootFlag    = "sdmc:/atmosphere/contents/0100000000000C21/flags/boot2.flag";
+    constexpr const char *OldBootFlag = "sdmc:/atmosphere/contents/0100000000000C20/flags/boot2.flag";
+    constexpr const char *LauncherDir = "sdmc:/atmosphere/contents/0100000000000C21";
+    constexpr const char *LauncherTxt = "sdmc:/config/switch-frame-tap/launcher.txt";
     constexpr const char *ConfigDir   = "sdmc:/config/switch-frame-tap";
     constexpr const char *ConfigIni   = "sdmc:/config/switch-frame-tap/config.ini";
     constexpr const char *StreamOff   = "sdmc:/config/switch-frame-tap/stream-off";
@@ -401,7 +407,7 @@ namespace {
 
         void Refresh() {
             installed = FileExists(ModuleNsp);
-            boot = FileExists(BootFlag);
+            boot = FileExists(BootFlag) || FileExists(OldBootFlag);
             test_install = FileExists(TestArmFile);
             stream_file_on = !FileExists(StreamOff);
             shot_files = ListShots().size();
@@ -431,7 +437,18 @@ namespace {
 
         std::string StreamState() {
             if (!installed) { return "Not installed"; }
-            if (!running) { return boot ? "Not running - reboot to start it" : "Off at boot (see below)"; }
+            if (!running) {
+                if (!boot) { return "Off at boot (see below)"; }
+                /* v0.7.13: the launcher's word on this boot */
+                if (FILE *f = std::fopen(LauncherTxt, "r")) {
+                    char b[1024] = {};
+                    const size_t n = std::fread(b, 1, sizeof(b) - 1, f);
+                    std::fclose(f);
+                    b[n] = 0;
+                    if (std::strstr(b, "result=low-memory")) { return "Not started: other sysmodules use the memory it needs"; }
+                }
+                return "Not running yet - it starts ~30 s after boot";
+            }
             if (!have_status) { return "Running (an older version?)"; }
             char b[96];
             switch (st.state) {
@@ -486,8 +503,10 @@ namespace {
 
         void SetBoot(bool on) {
             if (!installed) { Toast("The sysmodule is not installed"); return; }
+            std::remove(OldBootFlag);
             if (on) {
-                mkdir((std::string(ModuleDir) + "/flags").c_str(), 0777);
+                mkdir(LauncherDir, 0777);
+                mkdir((std::string(LauncherDir) + "/flags").c_str(), 0777);
                 if (!TouchFile(BootFlag)) { Toast("Could not write the boot flag"); return; }
             } else {
                 std::remove(BootFlag);
@@ -524,7 +543,8 @@ namespace {
                 "The same switch as in the overlay; it is remembered across reboots." });
             rows.push_back({ Kind::Setting, "Start with the console", [this] { return std::string(!installed ? "Not installed" : boot ? "On" : "Off"); },
                 [this] { return boot ? ColGood : ColDim; }, [this](int) { SetBoot(!boot); },
-                "Whether Atmosphere starts the sysmodule at boot. Takes effect at the next boot. "
+                "Whether the sysmodule starts with the console - about 30 s after boot, once the HOME menu is up, and only if "
+                "the other sysmodules leave it the memory it needs. Takes effect at the next boot. "
                 "Off is the clean way to disable it completely." });
             rows.push_back({ Kind::Setting, "Connection", [this] {
                     std::string v = ConnNames[set.conn];
@@ -568,7 +588,6 @@ namespace {
                             case 1: return std::string("On - playing");
                             case 2: return std::string("On - recorder unavailable");
                             case 3: return std::string("On - could not start");
-                            case 4: return std::string("On - not enough system memory");
                         }
                     }
                     return std::string("On");
@@ -577,9 +596,7 @@ namespace {
                 "Sends the game's sound to the PC viewer (M in the viewer mutes it). It comes from the console's own video "
                 "recorder, as with SysDVR - games that turn video capture off have no sound in the stream unless "
                 "\"Sound in no-record games\" below is on. "
-                "Webcam mode has no sound: a USB camera cannot carry it from the Switch. "
-                "The recorder takes about 7 MB of the memory sysmodules share; if other sysmodules leave less, "
-                "streams have no sound until one of them is turned off." });
+                "Webcam mode has no sound: a USB camera cannot carry it from the Switch." });
 
             rows.push_back({ Kind::Setting, "Sound in no-record games", [this] {
                     const char *v = sound == sftsound::State::On ? "On" : sound == sftsound::State::Off ? "Off" : "Not installed";
@@ -727,8 +744,8 @@ namespace {
             };
             check("Sysmodule", ModuleNsp, true, "atmosphere/contents/0100000000000C20/exefs.nsp - the part that streams.");
             check("Memory helper", "sdmc:/atmosphere/contents/0100000000000C21/exefs.nsp", true,
-                  "atmosphere/contents/0100000000000C21/exefs.nsp - started only while a viewer is connected, it lends the "
-                  "streaming memory so that game manuals, news and the eShop work whenever you are not streaming.");
+                  "atmosphere/contents/0100000000000C21/exefs.nsp - starts the sysmodule once the console has booted, and while a viewer "
+                  "is connected lends it the streaming memory, so that game manuals, news and the eShop work whenever you are not streaming.");
             check("Overlay", "sdmc:/switch/.overlays/switch-frame-tap.ovl", false,
                   "switch/.overlays/switch-frame-tap.ovl - stream on/off and handheld/docked from inside a game (needs the Tesla overlay loader).");
             rows.push_back({ Kind::Info, "Install type", [this] { return std::string(test_install ? "Test (applet-mitm.armed)" : "Release"); },
@@ -740,7 +757,7 @@ namespace {
                 "Switch Frame Tap - native 1080p60 game streaming to a PC over USB. github.com/TomasUribe/switch-frame-tap (GPL-2.0)." });
             rows.push_back({ Kind::Info, "If something goes wrong", [] { return std::string("Hold Volume Up at boot"); }, nullptr, nullptr,
                 "Holding Volume Up while Atmosphere boots skips all sysmodules. Or turn off 'Start with the console' here, "
-                "or delete atmosphere/contents/0100000000000C20 on a PC." });
+                "or delete atmosphere/contents/0100000000000C20 and 0100000000000C21 on a PC." });
 
             sel = 1;
         }

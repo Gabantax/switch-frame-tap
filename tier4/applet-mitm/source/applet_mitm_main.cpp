@@ -328,6 +328,63 @@ namespace ams {
             LogAppletLimits("ballast");
         }
 
+        /* v0.7.13: the launcher (0100000000000C21, launcher.c) holds the
+         * boot2.flag and starts the module once the system has booted - at
+         * boot, the module's memory came out of the System group the system
+         * still needed ~7.2 MB of, and am fataled (2001-0132, #15). An older
+         * install's own boot2.flag is moved to the launcher; started by it in
+         * the first minute, the module exits at once (its memory goes back
+         * before the system needs it) and the launcher starts it later. */
+        bool StartedInTime() {
+            constexpr const char *OwnFlag = "sdmc:/atmosphere/contents/0100000000000C20/flags/boot2.flag";
+            constexpr const char *LauncherFlag = "sdmc:/atmosphere/contents/0100000000000C21/flags/boot2.flag";
+            constexpr const char *Go = "sdmc:/config/switch-frame-tap/launch.txt";
+            fs::DirectoryEntryType t;
+            if (R_SUCCEEDED(fs::GetEntryType(std::addressof(t), OwnFlag))) {
+                static_cast<void>(fs::CreateDirectory("sdmc:/atmosphere/contents/0100000000000C21/flags"));
+                static_cast<void>(fs::CreateFile(LauncherFlag, 0));
+                static_cast<void>(fs::DeleteFile(OwnFlag));
+                mitm::applet::LogLine("boot2.flag moved to the launcher (0100000000000C21): it starts Switch Frame Tap after the system has booted");
+            }
+            /* sysmodule managers list the launcher's toolbox.json now */
+            static_cast<void>(fs::DeleteFile("sdmc:/atmosphere/contents/0100000000000C20/toolbox.json"));
+            u64 at = 0;
+            {
+                fs::FileHandle f;
+                if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), Go, fs::OpenMode_Read))) {
+                    char b[24] = {};
+                    size_t n = 0;
+                    static_cast<void>(fs::ReadFile(std::addressof(n), f, 0, b, sizeof(b) - 1));
+                    fs::CloseFile(f);
+                    static_cast<void>(fs::DeleteFile(Go));
+                    at = std::strtoull(b, nullptr, 10);
+                }
+            }
+            const u64 now = armTicksToNs(armGetSystemTick()) / 1000000;
+            const bool by_launcher = at != 0 && now >= at && now - at < 15000;
+            if (!by_launcher && now < 60000) {
+                mitm::applet::LogLine("started at %llu.%03llu s, before the system has booted (an older install's boot2.flag) - exiting; the launcher starts it once the HOME menu is up",
+                                      static_cast<unsigned long long>(now / 1000), static_cast<unsigned long long>(now % 1000));
+                return false;
+            }
+            /* what the launcher saw - in this log, for reports */
+            fs::FileHandle f;
+            if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), "sdmc:/config/switch-frame-tap/launcher.txt", fs::OpenMode_Read))) {
+                char b[768] = {};
+                size_t n = 0;
+                static_cast<void>(fs::ReadFile(std::addressof(n), f, 0, b, sizeof(b) - 1));
+                fs::CloseFile(f);
+                for (char *line = b; line != nullptr && *line != 0; ) {
+                    char *nl = std::strchr(line, '\n');
+                    if (nl != nullptr) { *nl = 0; }
+                    if (*line != 0) { mitm::applet::LogLine("launcher: %s", line); }
+                    line = nl != nullptr ? nl + 1 : nullptr;
+                }
+            }
+            if (!by_launcher) { mitm::applet::LogLine("started by hand, %llu s after boot", static_cast<unsigned long long>(now / 1000)); }
+            return true;
+        }
+
         void HeartbeatThread(void *) {
             for (u32 i = 1; ; i++) {
                 for (u32 t = 0; t < 12; ++t) {
@@ -882,6 +939,7 @@ namespace ams {
         os::SetThreadNamePointer(os::GetCurrentThread(), "applet-mitm.Main");
 
         mitm::applet::LogInit();
+        if (!StartedInTime()) { return; }
         LogAppletLimits("main start");
 
         /* M72: first thing, before any other work. With mitm.lst present every
@@ -894,7 +952,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.13-test5: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.13-test6: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

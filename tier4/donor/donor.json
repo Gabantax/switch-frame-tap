@@ -12,10 +12,13 @@
     "is_64_bit": true,
     "address_space_type": 1,
     "filesystem_access": {
-        "permissions": "0x0000000000000000"
+        "permissions": "0xffffffffffffffff"
     },
     "service_access": [
-        "sftap"
+        "sftap",
+        "pm:dmnt",
+        "pm:shell",
+        "fsp-srv"
     ],
     "service_host": [],
     "kernel_capabilities": [

@@ -8,11 +8,15 @@
  * viewer is connected: it takes the memory from the Applet pool and lends it
  * to the module as transfer memory, then waits. When the module gives it back
  * (unmaps it), this frees it and exits.
+ *
+ * v0.7.13: it is also the launcher (launcher.c) - at boot it starts the module
+ * once the system has booted, so the module never holds System memory the
+ * boot itself needs.
  */
 #include <switch.h>
 
 u32 __nx_applet_type = AppletType_None;
-u32 __nx_fs_num_sessions = 1;
+u32 __nx_fs_num_sessions = 1;   /* the launcher's SD card */
 
 /* libnx's own heap stays tiny and static, so svcSetHeapSize is ours alone */
 #define INNER_HEAP_SIZE 0x4000
@@ -31,8 +35,30 @@ void __appInit(void) {
 
 void __appExit(void) { smExit(); }
 
+void Launcher(void);   /* launcher.c (v0.7.13) */
+
+#define SFT_TID 0x0100000000000C20ull
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    /* v0.7.13: started at boot (this program's boot2.flag), or by hand with
+     * the module not running: start the module once the system has booted.
+     * Started by the module while a viewer connects: lend it the memory. */
+    if (R_SUCCEEDED(pmdmntInitialize())) {
+        u64 pid = 0;
+        const bool at_boot = armTicksToNs(armGetSystemTick()) < 15000000000ull;
+        bool sft = R_SUCCEEDED(pmdmntGetProcessId(&pid, SFT_TID));
+        /* at boot, a module from an older install's own boot2.flag gives the
+         * start to this program and exits within a moment - let it; if it
+         * stays (an older module without that), leave it alone */
+        for (int i = 0; at_boot && sft && i < 40; ++i) {
+            svcSleepThread(250000000ull);
+            sft = R_SUCCEEDED(pmdmntGetProcessId(&pid, SFT_TID));
+        }
+        if (!sft) { Launcher(); }
+        pmdmntExit();
+        if (at_boot || !sft) { return 0; }
+    }
     Service ctl;
     if (R_FAILED(smGetService(&ctl, "sftap"))) { return 1; }
     smExit();   /* sm only for this */

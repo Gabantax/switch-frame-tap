@@ -25,23 +25,25 @@ for d in overlay manager; do
 done
 
 rm -rf "$STAGE"
-mkdir -p "$STAGE/atmosphere/contents/0100000000000C20/flags" "$STAGE/switch/.overlays" "$STAGE/switch/switch-frame-tap"
+mkdir -p "$STAGE/atmosphere/contents/0100000000000C20" "$STAGE/switch/.overlays" "$STAGE/switch/switch-frame-tap"
 # AMS_TREE / DKP_IMG (tier4/applet-mitm/build.sh) pick the Atmosphere the
 # sysmodule is built against - v0.7.11: ref/Atmosphere-1.12.0 for firmware 23
 NSP="$REPO/tier4/applet-mitm/applet-mitm${AMS_TREE:+-$(basename "$AMS_TREE")}.nsp"
 cp "$NSP" "$STAGE/atmosphere/contents/0100000000000C20/exefs.nsp"
-: > "$STAGE/atmosphere/contents/0100000000000C20/flags/boot2.flag"
-# lets sysmodule managers (ovl-sysmodules and the like) list it by name
-cat > "$STAGE/atmosphere/contents/0100000000000C20/toolbox.json" <<JSON
+# v0.7.13: no boot2 flag here - the launcher (0100000000000C21) starts the
+# sysmodule once the system has booted (tier4/donor/source/launcher.c)
+# v0.7.10: the memory donor, which since v0.7.13 is also that launcher: it holds
+# the boot2 flag, and the toolbox.json so sysmodule managers (ovl-sysmodules
+# and the like) list it by name and switch "start at boot" on the right flag
+mkdir -p "$STAGE/atmosphere/contents/0100000000000C21/flags"
+: > "$STAGE/atmosphere/contents/0100000000000C21/flags/boot2.flag"
+cat > "$STAGE/atmosphere/contents/0100000000000C21/toolbox.json" <<JSON
 {
     "name": "Switch Frame Tap",
-    "tid": "0100000000000C20",
+    "tid": "0100000000000C21",
     "requires_reboot": true
 }
 JSON
-# v0.7.10: the memory donor - no boot2 flag; the sysmodule launches it while a
-# viewer is connected (tier4/donor/source/main.c)
-mkdir -p "$STAGE/atmosphere/contents/0100000000000C21"
 cp "$REPO/tier4/donor/sft-donor.nsp" "$STAGE/atmosphere/contents/0100000000000C21/exefs.nsp"
 cp "$REPO/overlay/switch-frame-tap.ovl" "$STAGE/switch/.overlays/"
 cp "$REPO/manager/switch-frame-tap.nro" "$STAGE/switch/switch-frame-tap/"

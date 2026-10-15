@@ -1473,6 +1473,8 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_queue_transform{0};
     constinit std::atomic<u32> g_queue_crop_wh{0};
     constinit std::atomic<bool> g_queue_crop_origin0{true};
+    constinit std::atomic<bool> g_viewer_key_request{false};
+    constinit std::atomic<bool> g_viewer_can_ask{false};
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
     constinit PresentRec g_present_ring[PresentRingSize] = {};
@@ -5654,7 +5656,7 @@ namespace ams::mitm::applet {
                 return 1;
             }
 
-            struct PresentSnap { u32 count; s32 slot; u32 fence_n; u64 fence[4]; u64 tick; u32 transform; };
+            struct PresentSnap { u32 count; s32 slot; u32 fence_n; u64 fence[4]; u64 tick; u32 transform; u32 crop; };
 
             /* present c from the ring; false if it was overwritten (8+ behind) */
             static bool ReadPresent(u32 c, PresentSnap *out) {
@@ -5668,6 +5670,7 @@ namespace ams::mitm::applet {
                     for (u32 k = 0; k < 4; ++k) { out->fence[k] = r.fence[k].load(std::memory_order_relaxed); }
                     out->tick    = r.tick.load(std::memory_order_relaxed);
                     out->transform = r.transform.load(std::memory_order_relaxed);
+                    out->crop    = r.crop.load(std::memory_order_relaxed);
                     std::atomic_thread_fence(std::memory_order_acquire);
                     if (r.seq.load(std::memory_order_relaxed) == s1) { return out->count == c; }
                 }
@@ -5764,6 +5767,7 @@ namespace ams::mitm::applet {
                         seen = pick.count;
                         present_tick = pick.tick;
                         present_flip = pick.transform & 3;
+                        cap_crop = pick.crop;
                         const s32 slot = pick.slot;
                         this->Calibrate(dbg, pick.count, slot);
                         if (!this->ReadSlot(dbg, this->SlotAddr(slot_base, slot), read_ns, sig)) { return false; }
@@ -5802,6 +5806,7 @@ namespace ams::mitm::applet {
                     for (u32 k = 0; k < 4; ++k) { fence[k] = g_queue_fence[k].load(std::memory_order_relaxed); }
                     present_tick = g_queue_tick.load(std::memory_order_relaxed);
                     present_flip = g_queue_transform.load(std::memory_order_relaxed) & 3;
+                    cap_crop = g_queue_crop_origin0.load(std::memory_order_relaxed) ? g_queue_crop_wh.load(std::memory_order_relaxed) : 0;
                     std::atomic_thread_fence(std::memory_order_acquire);
                     if (g_queue_seq.load(std::memory_order_relaxed) == s1) { break; }
                 }
@@ -5822,12 +5827,27 @@ namespace ams::mitm::applet {
             bool ChangedSinceRead(::ams::svc::Handle dbg) const {
                 for (u32 k = 0; k < 8; ++k) {
                     const u64 off = CornerFast() ? static_cast<u64>(k % CornerBlockRows) * FbBlockRow + ((static_cast<u64>(k) * 0x2340u % CornerBlockRowBytes) & ~UINT64_C(63))
-                                           : ((static_cast<u64>(buf_bytes) / 8 * k + 1024) & ~UINT64_C(63));
+                                           : ((static_cast<u64>(last_read_bytes) / 8 * k + 1024) & ~UINT64_C(63));
                     alignas(64) u8 b[64];
                     if (!DbgRead(dbg, b, last_read + off, sizeof(b))) { return false; }
                     if (std::memcmp(b, g_ind_buf + off, sizeof(b)) != 0) { return true; }
                 }
                 return false;
+            }
+
+            /* v0.7.13: a surface other than 1920x1080 is read only down to the
+             * last block row holding what the game shows - SMO handheld: 6 of
+             * its 8 (768 of 900 rows), a quarter less to copy. The rows below
+             * stay stale in g_ind_buf; the VIC never samples them. */
+            u32 ReadBytes() const {
+                if (size_check_ok) { return buf_bytes; }
+                const u32 rows = PresentRect(src, cap_crop) & 0xFFFF;
+                const u32 blk_rows = 8u << src.blk_h_log2;
+                const u32 row_bytes = src.stride_px * 4;
+                const u64 blk_bytes = static_cast<u64>(row_bytes) * blk_rows;
+                if (row_bytes % 64 != 0 || blk_bytes == 0 || buf_bytes % blk_bytes != 0) { return buf_bytes; }
+                const u64 n = (static_cast<u64>(rows) + blk_rows - 1) / blk_rows * blk_bytes;
+                return n < buf_bytes ? static_cast<u32>(n) : buf_bytes;
             }
 
             bool ReadSlot(::ams::svc::Handle dbg, u64 base, u64 *read_ns, u32 *sig) {
@@ -5842,14 +5862,16 @@ namespace ams::mitm::applet {
                         armDCacheFlush(dst, CornerBlockRowBytes);
                     }
                 } else {
-                    for (u32 off = 0; off < buf_bytes; off += ReadPiece) {
-                        const u32 n = buf_bytes - off < ReadPiece ? buf_bytes - off : ReadPiece;
+                    const u32 bytes = ReadBytes();
+                    last_read_bytes = bytes;
+                    for (u32 off = 0; off < bytes; off += ReadPiece) {
+                        const u32 n = bytes - off < ReadPiece ? bytes - off : ReadPiece;
                         if (!DbgRead(dbg, g_ind_buf + off, base + off, n)) {
                             return false;
                         }
                     }
                     const u64 tf = armTicksToNs(armGetSystemTick());
-                    armDCacheFlush(g_ind_buf, buf_bytes);
+                    armDCacheFlush(g_ind_buf, bytes);
                     last_flush_ns = armTicksToNs(armGetSystemTick()) - tf;
                 }
                 u32 h = 0;
@@ -5902,16 +5924,18 @@ namespace ams::mitm::applet {
              * that fits the surface: 1920x1080 surfaces keep the size check
              * (Smash presents 1280x720 while drawing 1920x1080). */
             u32 crop_used = 0;
-            static u32 PresentRect(const SrcDesc &d) {
-                const u32 crop = g_queue_crop_wh.load(std::memory_order_relaxed);
+            u32 cap_crop = 0;          /* v0.7.13: the captured present's crop (PresentRec::crop) */
+            u32 last_read_bytes = 0;   /* v0.7.13: how much of the slot ReadSlot copied */
+            /* crop: the captured present's (cap_crop) */
+            static u32 PresentRect(const SrcDesc &d, u32 crop) {
                 const u32 cw = crop >> 16, ch = crop & 0xFFFF;
-                const bool ok = crop != 0 && g_queue_crop_origin0.load(std::memory_order_relaxed)
+                const bool ok = crop != 0
                              && cw >= 320 && ch >= 180 && cw <= d.w && ch <= d.h
                              && (cw * 9 > ch * 16 ? cw * 9 - ch * 16 : ch * 16 - cw * 9) <= cw * 9 / 50;
                 return ok ? crop : (d.w << 16 | d.h);
             }
             void CropToPresent(SrcDesc &d) {
-                const u32 use = PresentRect(d);
+                const u32 use = PresentRect(d, cap_crop);
                 if (use != crop_used) {
                     if (crop_used != 0 || use != (d.w << 16 | d.h)) {
                         LogLine("   nvf: the game presents %ux%u of its %ux%u picture - the VIC %s", use >> 16, use & 0xFFFF, d.w, d.h,
@@ -6243,7 +6267,7 @@ namespace ams::mitm::applet {
         /* what the session just read into g_ind_buf: the handheld corner, or
          * the whole surface */
         bool ShotFromSession(const NvfSession &s) {
-            const u32 shown = s.size_check_ok ? (s.src.w << 16 | s.src.h) : NvfSession::PresentRect(s.src);   /* v0.7.13: what the game shows */
+            const u32 shown = s.size_check_ok ? (s.src.w << 16 | s.src.h) : NvfSession::PresentRect(s.src, s.cap_crop);   /* v0.7.13: what the game shows */
             const u32 w = s.corner ? NvfW : shown >> 16, h = s.corner ? NvfH : shown & 0xFFFF;
             const size_t n = s.CornerFast() ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
             return WriteShot(g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8, s.present_flip);
@@ -6604,6 +6628,9 @@ namespace ams::mitm::applet {
             ON_SCOPE_EXIT { g_audio_active.store(false, std::memory_order_relaxed); };
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
+            bool said_long_gop = false;    /* v0.7.13 */
+            u32 key_requests = 0;
+            if (live) { g_viewer_key_request.store(false, std::memory_order_relaxed); }   /* it starts with one anyway */
             SizeCheck size_check(s.corner);   /* v0.7.8: the 720p/1080p check, shared with the webcam */
             /* v0.6: the experiment's window (one variant) */
             u64 ab_bytes_p = 0, ab_bytes_i = 0, ab_intra = 0, ab_inter = 0, ab_qp = 0, ab_t0 = armTicksToNs(armGetSystemTick());
@@ -6943,7 +6970,19 @@ namespace ams::mitm::applet {
                     prep_p(ab_variant);
                     need_idr = true;
                 }
-                if (gop == 0 || need_idr || pos >= gop) { pos = 0; }
+                /* v0.7.13: the viewer asked for one (a new decoder, a recording
+                 * starting). Over TCP nothing is lost, so a keyframe is only
+                 * for such a start: to a viewer that asks, the network sends
+                 * one every 240 frames - each is up to ~20 P frames' worth,
+                 * and on a busy link it held the stream up ~0.2 s every second
+                 * (creeper3010, #7) - the P frames get those bits instead */
+                if (live && g_viewer_key_request.exchange(false, std::memory_order_relaxed)) { need_idr = true; ++key_requests; }
+                const u32 gop_now = (g_tx_net && gop != 0 && g_viewer_can_ask.load(std::memory_order_relaxed)) ? 240 : gop;
+                if (gop_now != gop && !said_long_gop) {
+                    said_long_gop = true;
+                    LogLine("   nvstream: the network viewer asks for keyframes when it needs one - otherwise one every 240 frames (setting: %u)", gop);
+                }
+                if (gop == 0 || need_idr || pos >= gop_now) { pos = 0; }
                 NvfJob j;
                 j.setup = L.off_setup;
                 j.ref_out = refs[pos & 1];
@@ -7113,6 +7152,7 @@ namespace ams::mitm::applet {
              * frame is also the last one the VIC converted. */
             if (!live && !stalled && last_sent != ~0u && last_sent == last_vic) {
                 LogLine("   nvstream: last frame sent #%u, %s, %u frame(s) after its IDR", last_sent, last_pos == 0 ? "IDR" : "P", last_pos);
+                if (key_requests != 0) { LogLine("   nvstream: %u keyframe(s) the viewer asked for", key_requests); }
                 /* M94: pipelined, the last frame's picture is in the buffer its
                  * frame number picked */
                 const u32 kk = pipe ? (last_sent & 1) : 0;

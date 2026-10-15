@@ -5,6 +5,7 @@
 #include "applet_mitm_net.hpp"
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
+#include "applet_mitm_nv.hpp"
 /* the umbrella <switch.h> wraps libnx in extern "C"; the single headers do not */
 extern "C" {
 #include <switch/services/bsd.h>
@@ -188,12 +189,20 @@ namespace ams::mitm::applet {
                     if (us >= 0) { bsdSetSockOpt(us, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one)); }
                 }
                 if (const int c = g_client.load(); c >= 0) {
-                    /* one viewer at a time. The viewer never sends anything,
-                     * so its socket turning readable means it closed. */
+                    /* one viewer at a time. It sends only "SFTK" (v0.7.13: a
+                     * keyframe, please); end of stream means it closed. */
                     pollfd cp = { c, POLLIN, 0 };
                     if (bsdPoll(&cp, 1, 250) > 0 && (cp.revents & (POLLIN | POLLHUP | POLLERR))) {
-                        u8 junk[64];
-                        if (bsdRecv(c, junk, sizeof(junk), 0) <= 0) { NetDropClient("the viewer closed the connection"); }
+                        u8 got[64];
+                        const ssize_t n = bsdRecv(c, got, sizeof(got), 0);
+                        if (n <= 0) { NetDropClient("the viewer closed the connection"); }
+                        for (ssize_t k = 0; k + 4 <= n; ++k) {
+                            if (std::memcmp(got + k, "SFTK", 4) == 0) {
+                                g_viewer_can_ask.store(true, std::memory_order_relaxed);
+                                g_viewer_key_request.store(true, std::memory_order_relaxed);
+                                break;
+                            }
+                        }
                     }
                     continue;
                 }
@@ -219,6 +228,7 @@ namespace ams::mitm::applet {
                 IpString(g_client_ip, s, sizeof(s));
                 ++s_clients;
                 LogLine("net: viewer connected from %s", s);
+                g_viewer_can_ask.store(false, std::memory_order_relaxed);   /* until this viewer asks */
                 g_client = c;
             }
         }

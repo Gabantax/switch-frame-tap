@@ -952,7 +952,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.13-test6: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.13-test7: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1423,6 +1423,8 @@ namespace ams::mitm::applet {
         u32 got = 0;
         if (R_FAILED(usbDsEndpoint_GetReportData(ep, std::addressof(report))) ||
             R_FAILED(usbDsParseReportData(std::addressof(report), g_bye_urb, nullptr, std::addressof(got)))) { return false; }
+        /* v0.7.13: "SFTK" - the viewer wants a keyframe (a new decoder, a recording) */
+        if (got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTK", 4) == 0) { g_viewer_key_request.store(true, std::memory_order_relaxed); return false; }
         return got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTQ", 4) == 0;
     }
 

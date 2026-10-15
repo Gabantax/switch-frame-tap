@@ -220,6 +220,10 @@ namespace ams::mitm::applet {
                 for (u32 k = 0; k < 4; ++k) { r.fence[k].store(have_fence ? fv[k] : 0, std::memory_order_relaxed); }
                 r.tick.store(qtick, std::memory_order_relaxed);
                 r.transform.store(xf, std::memory_order_relaxed);
+                {
+                    const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
+                    r.crop.store((cw > 0 && chh > 0 && crop[0] == 0 && crop[1] == 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
+                }
                 r.seq.fetch_add(1, std::memory_order_release);
             }
             g_queue_count.fetch_add(1, std::memory_order_release);

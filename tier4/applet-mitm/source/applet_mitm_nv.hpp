@@ -130,6 +130,11 @@ namespace ams::mitm::applet {
     extern std::atomic<u64> g_crop_full_pid;   /* v0.7.9: the application whose crop was ever 1920x1080 */
     extern std::atomic<u32> g_queue_crop_wh;   /* v0.7.3: the last present's crop, w << 16 | h (0: none) */
     extern std::atomic<bool> g_queue_crop_origin0;   /* v0.7.13: that crop starts at (0,0) */
+    /* v0.7.13: the viewer asked for a keyframe ("SFTK", USB or network), and
+     * this network viewer can ask (it has once): keyframes then every 240
+     * frames on the network, and on request */
+    extern std::atomic<bool> g_viewer_key_request;
+    extern std::atomic<bool> g_viewer_can_ask;
     extern std::atomic<u64> g_queue_fence[4];
     /* M89: a seqlock over slot + fence: odd while the binder thread writes */
     extern std::atomic<u32> g_queue_seq;
@@ -147,6 +152,7 @@ namespace ams::mitm::applet {
         std::atomic<u64> fence[4];
         std::atomic<u64> tick;
         std::atomic<u32> transform;   /* v0.4.1: queueBuffer's transform (bit 0 flip H, bit 1 flip V) */
+        std::atomic<u32> crop;        /* v0.7.13: its crop, w << 16 | h - 0: none, or not from (0,0) */
     };
     constexpr u32 PresentRingSize = 8;
     extern PresentRec g_present_ring[PresentRingSize];

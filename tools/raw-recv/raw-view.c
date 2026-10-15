@@ -614,10 +614,26 @@ static int status_for_menu(char *head, size_t hn, char *detail, size_t dn, uint3
     return fresh;
 }
 
+/* v0.7.13: ask the console for a keyframe now - the decoder reopened, a
+ * recording starts - instead of waiting for its next one (up to 4 s over the
+ * network, where the console spaces them out for viewers that can ask: the
+ * first ask, at connect, says this one can). Sent by the reader thread, which
+ * owns the connection; consoles before v0.7.13 ignore it. */
+static SDL_atomic_t g_want_key;
+static void key_request(void) { SDL_AtomicSet(&g_want_key, 1); }
+static void key_send_pending(void)
+{
+    if (!SDL_AtomicCAS(&g_want_key, 1, 0)) return;
+    static const unsigned char msg[4] = { 'S', 'F', 'T', 'K' };
+    if (g_sock != SOCK_BAD) { send(g_sock, (const char *)msg, sizeof(msg), 0); }
+    else if (g_usb) { int n = 0; libusb_bulk_transfer(g_usb, SFT_EP_OUT, (unsigned char *)msg, sizeof(msg), &n, 20); }
+}
+
 static int reader_main(void *arg)
 {
     (void)arg;
     while (!g_quit && !g_rd_stop && !g_lost) {
+        key_send_pending();
         sft_hdr_t hdr;
         const int r = read_exact((uint8_t *)&hdr, sizeof(hdr), 100);
         if (r <= 0) continue;
@@ -665,6 +681,7 @@ static void reader_start(void)
     if (!g_qm) { g_qm = SDL_CreateMutex(); g_q_put = SDL_CreateCond(); g_q_get = SDL_CreateCond(); }
     g_qh = g_qn = 0;
     g_rd_stop = 0;
+    key_request();                     /* v0.7.13: tells the console this viewer can ask */
     g_rd = SDL_CreateThread(reader_main, "usb-reader", NULL);
 }
 
@@ -922,6 +939,7 @@ static void act_fullscreen(SDL_Window *win)
 static void act_record(SDL_Window *win)
 {
     rec_toggle();
+    if (rec_active()) key_request();   /* v0.7.13: it starts at the next keyframe - now */
     char t[256], rs[200];
     rec_status(rs, sizeof(rs));
     snprintf(t, sizeof(t), "Switch Frame Tap%s", rs[0] ? rs : "  |  recording stopped");
@@ -1197,6 +1215,7 @@ static int decoder_main(void *arg)
         if (g_dec_reopen) {                    /* v0.7.12: hardware decoding switched in the drawer */
             g_dec_reopen = 0;
             h264_close(a->dec);
+            key_request();                     /* v0.7.13: a new decoder starts at a keyframe */
             if (h264_open(a->dec, 1, 1, g_hwdec) == 0) {
                 if (a->dec->hwname) snprintf(g_dec_name, sizeof(g_dec_name), "GPU (%s)", a->dec->hwname);
                 else snprintf(g_dec_name, sizeof(g_dec_name), "1 thread");
@@ -1222,6 +1241,7 @@ static int decoder_main(void *arg)
                     if (fb_ms / fb_n > 12.0) {
                         fprintf(stderr, "\ndecode: %.1f ms a frame on one thread - switching to two frame threads (one frame more latency)\n", fb_ms / fb_n);
                         h264_close(a->dec);
+                        key_request();
                         if (h264_open(a->dec, 0, 2, 0) == 0) { g_dec_fallback = 1; g_dec_mode = "2 threads (slow PC)"; hud_toast("Decoding on 2 threads: this PC is slow for 1"); }
                         continue;
                     }
@@ -1236,6 +1256,7 @@ static int decoder_main(void *arg)
             if (a->dec->hwname && got < 0 && ++hw_err >= 30) {
                 fprintf(stderr, "\ndecode: %s failed %d frames in a row - software from now on\n", a->dec->hwname, hw_err);
                 h264_close(a->dec);
+                key_request();
                 if (h264_open(a->dec, 1, 1, 0) == 0) { snprintf(g_dec_name, sizeof(g_dec_name), "1 thread (GPU failed)"); g_dec_mode = g_dec_name; hud_toast("GPU decoding failed - decoding on the CPU"); }
                 hw_err = 0;
                 continue;
@@ -1515,6 +1536,9 @@ int main(int argc, char **argv)
     int swap_rb = 0, scale = 1, headless = 0, low_latency = 1, threads = 2;   /* v0.7.11: one decode thread unless --threads */
     long max_frames = 0;
     const char *file = NULL, *record = NULL, *h264_out = NULL, *net_host = NULL;
+#ifndef _WIN32
+    signal(SIGPIPE, SIG_IGN);          /* v0.7.13: the viewer sends (key_request); a closed socket must not end it */
+#endif
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--swap")) swap_rb = 1;
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);

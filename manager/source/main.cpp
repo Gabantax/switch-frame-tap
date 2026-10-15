@@ -33,7 +33,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.7.13-test4";
+    constexpr const char *AppVersion  = "0.7.13-test5";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -568,6 +568,7 @@ namespace {
                             case 1: return std::string("On - playing");
                             case 2: return std::string("On - recorder unavailable");
                             case 3: return std::string("On - could not start");
+                            case 4: return std::string("On - not enough system memory");
                         }
                     }
                     return std::string("On");
@@ -576,7 +577,9 @@ namespace {
                 "Sends the game's sound to the PC viewer (M in the viewer mutes it). It comes from the console's own video "
                 "recorder, as with SysDVR - games that turn video capture off have no sound in the stream unless "
                 "\"Sound in no-record games\" below is on. "
-                "Webcam mode has no sound: a USB camera cannot carry it from the Switch." });
+                "Webcam mode has no sound: a USB camera cannot carry it from the Switch. "
+                "The recorder takes about 7 MB of the memory sysmodules share; if other sysmodules leave less, "
+                "streams have no sound until one of them is turned off." });
 
             rows.push_back({ Kind::Setting, "Sound in no-record games", [this] {
                     const char *v = sound == sftsound::State::On ? "On" : sound == sftsound::State::Off ? "Off" : "Not installed";

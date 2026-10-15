@@ -43,7 +43,10 @@ namespace ams {
 
     namespace {
 
-        constexpr size_t MallocBufferSize = 1_MB;
+        /* v0.7.13: 256 KB, was 1 MB - every custom sysmodule shares a few MB
+         * of the System group with am (#15), and the most ever in use was
+         * 17 KB (Run v0713-ballast4-late: a game, the HOME menu, applets) */
+        constexpr size_t MallocBufferSize = 256_KB;
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];
 
         enum PortIndex {
@@ -891,7 +894,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.13-test4: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.13-test5: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

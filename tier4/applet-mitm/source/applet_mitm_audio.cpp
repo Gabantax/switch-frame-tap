@@ -1,6 +1,7 @@
 #include "applet_mitm_audio.hpp"
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
+#include "applet_mitm_nv.hpp"
 
 namespace ams::mitm::applet {
 
@@ -16,6 +17,21 @@ namespace ams::mitm::applet {
          * that reply, and at most once from this process. */
         constexpr u32 GrcdNotInitialized = 0x3E8D4;
         constinit bool g_begin_called = false;
+
+        /* v0.7.13: Begin makes grc take ~7.2 MB of the System group for the
+         * rest of the boot - the group every custom sysmodule shares, and am.
+         * Called at boot, it left am short on consoles with a few more
+         * sysmodules: am fataled with 2001-0132 (#15, GBAtemp; reproduced here
+         * with 4 MB held, Run v0713-ballast4). Now only once a viewer streams,
+         * and only with room to spare - otherwise that stream has no sound. */
+        constexpr u64 GrcBeginBytes = UINT64_C(7680) * 1024;   /* measured 7228 KB */
+        constexpr u64 SystemSpareBytes = UINT64_C(1024) * 1024;
+
+        s64 SystemFreeBytes() {
+            u64 cur = 0, lim = 0;
+            if (g_pmdmnt_rc != 0 || R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_System, ::ams::svc::LimitableResource_PhysicalMemoryMax))) { return -1; }
+            return static_cast<s64>(lim) - static_cast<s64>(cur);
+        }
 
         /* one reader, one taker: a single-producer single-consumer byte ring */
         constexpr size_t RingSize = 64_KB;            /* ~340 ms of 48 kHz stereo s16 */
@@ -60,8 +76,12 @@ namespace ams::mitm::applet {
             ::Service srv = {};
             bool open = false;
             u32 errors = 0;
+            bool refused = false;   /* this stream had no room for the recorder */
             for (;;) {
-                if (!g_audio_enabled.load(std::memory_order_relaxed)) {
+                const bool streaming = g_audio_active.load(std::memory_order_relaxed);
+                if (!streaming) { refused = false; }
+                /* the recorder only once a stream wants sound (see GrcBeginBytes) */
+                if (!g_audio_enabled.load(std::memory_order_relaxed) || (!g_begin_called && (!streaming || refused))) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(300));
                     continue;
                 }
@@ -81,9 +101,19 @@ namespace ams::mitm::applet {
                 ::Result rc = Transfer(&srv, &n);    /* blocks until the recorder has sound */
                 if (rc == GrcdNotInitialized) {
                     if (g_begin_called) { os::SleepThread(TimeSpan::FromSeconds(1)); continue; }
+                    const s64 free0 = SystemFreeBytes();
+                    if (free0 >= 0 && static_cast<u64>(free0) < GrcBeginBytes + SystemSpareBytes) {
+                        refused = true;
+                        g_audio_state.store(4, std::memory_order_relaxed);
+                        LogLine("audio: the console's recorder needs ~%llu KB of system memory and only %lld KB is free (other sysmodules use it) - this stream has no game audio",
+                                static_cast<unsigned long long>((GrcBeginBytes + SystemSpareBytes) / 1024), static_cast<long long>(free0 / 1024));
+                        continue;
+                    }
                     g_begin_called = true;
                     rc = serviceDispatch(&srv, 1);    /* Begin: once per boot, never twice */
-                    LogLine("audio: grc:d Begin rc=0x%x", rc);
+                    const s64 free1 = SystemFreeBytes();
+                    LogLine("audio: grc:d Begin rc=0x%x (system memory free %lld KB -> %lld KB)", rc,
+                            static_cast<long long>(free0 / 1024), static_cast<long long>(free1 / 1024));
                     if (R_FAILED(rc)) {
                         g_audio_state.store(3, std::memory_order_relaxed);
                         LogLine("audio: the recorder would not start - no game audio this boot");

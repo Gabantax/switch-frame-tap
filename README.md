@@ -15,6 +15,11 @@ the viewer on your PC, start a game.
   <img src="docs/hero-switch-to-pc.jpg" width="90%" alt="The game on the Switch and the same picture on a laptop, connected by a USB-C cable">
 </p>
 
+<p align="center">
+  <a href="https://youtu.be/4Y5pTQaAOyo"><img src="https://img.youtube.com/vi/4Y5pTQaAOyo/maxresdefault.jpg" width="60%" alt="Demo video: a Switch plugged into a laptop, the same game on a TV, a Mario Kart race recorded at 1080p 60 fps"></a><br>
+  <sub><a href="https://youtu.be/4Y5pTQaAOyo">Watch the 40-second demo</a></sub>
+</p>
+
 ## Features
 
 - **Up to 1920x1080 at 60 fps**, the game's own resolution, encoded by the

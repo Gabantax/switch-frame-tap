@@ -361,6 +361,78 @@ namespace ams::mitm::applet {
         alignas(os::ThreadStackAlignment) constinit u8 g_app_watch_stack[8_KB];
         constinit os::ThreadType g_app_watch_thread;
 
+        /* v0.7.13 diagnostic (#15): every non-application process's memory at
+         * each app start and exit, as changes from the first look. A slow
+         * leak inside one - a session forwarded for each app and never
+         * closed - fills its heap without moving the System group, until the
+         * heap grows by 2 MB at once: the black screen after ~15 launches,
+         * which did not happen with the module not started (test10). */
+        struct ProcMem { u64 tid; u64 base; u64 last; };
+        constinit ProcMem g_procmem[48] = {};
+        constinit u32 g_procmem_n = 0;
+
+        const char *ProcName(u64 tid) {
+            switch (tid) {
+                case 0x0100000000000000: return "fs";
+                case 0x0100000000000003: return "pm";
+                case 0x0100000000000004: return "sm";
+                case 0x0100000000000012: return "bsdsockets";
+                case 0x0100000000000013: return "hid";
+                case 0x0100000000000019: return "nvservices";
+                case 0x010000000000001F: return "ns";
+                case 0x0100000000000022: return "capsrv";
+                case 0x0100000000000023: return "am";
+                case 0x0100000000000024: return "ssl";
+                case 0x010000000000002D: return "vi";
+                case 0x0100000000000036: return "grc";
+                case 0x0100000000000C20: return "SFT";
+                case 0x0100000000000C21: return "SFT-donor";
+                default: return nullptr;
+            }
+        }
+
+        void LogProcessMemory(u64 app_pid) {
+            static u64 pids[96];
+            s32 n = 0;
+            if (R_FAILED(::svcGetProcessList(&n, pids, 96))) { return; }
+            const bool first = g_procmem_n == 0;
+            char line[480];
+            int len = 0;
+            u64 total = 0;
+            for (s32 i = 0; i < n; ++i) {
+                if (pids[i] == app_pid) { continue; }
+                os::NativeHandle h = os::InvalidNativeHandle;
+                ncm::ProgramLocation loc = {};
+                cfg::OverrideStatus st = {};
+                if (R_FAILED(::ams::pm::dmnt::AtmosphereGetProcessInfo(std::addressof(h), std::addressof(loc), std::addressof(st), os::ProcessId{pids[i]}))) { continue; }
+                u64 used = 0;
+                const bool ok = R_SUCCEEDED(::svcGetInfo(&used, InfoType_UsedMemorySize, h, 0));
+                os::CloseNativeHandle(h);
+                const u64 tid = loc.program_id.value;
+                if (!ok || (tid >= 0x0100000000001000ull && tid < 0x0100000000002000ull)) { continue; }   /* applets */
+                total += used;
+                ProcMem *e = nullptr;
+                for (u32 k = 0; k < g_procmem_n; ++k) { if (g_procmem[k].tid == tid) { e = std::addressof(g_procmem[k]); break; } }
+                if (e == nullptr) {
+                    if (g_procmem_n >= 48) { continue; }
+                    e = std::addressof(g_procmem[g_procmem_n++]);
+                    *e = { tid, used, used };
+                    if (!first) { len += std::snprintf(line + len, sizeof(line) - len, " new %016llx %llu KB;", static_cast<unsigned long long>(tid), static_cast<unsigned long long>(used / 1024)); }
+                    continue;
+                }
+                if (used != e->last && len < static_cast<int>(sizeof(line)) - 64) {
+                    const char *nm = ProcName(tid);
+                    char idb[20];
+                    if (nm == nullptr) { std::snprintf(idb, sizeof(idb), "%llx", static_cast<unsigned long long>(tid)); nm = idb; }
+                    len += std::snprintf(line + len, sizeof(line) - len, " %s %llu KB (%+lld);", nm, static_cast<unsigned long long>(used / 1024),
+                                         static_cast<long long>((static_cast<s64>(used) - static_cast<s64>(e->base)) / 1024));
+                    e->last = used;
+                }
+            }
+            if (first) { LogLine("process memory: %u processes besides the game, %llu KB - changes from here on are logged", g_procmem_n, static_cast<unsigned long long>(total / 1024)); }
+            else if (len > 0) { LogLine("process memory (KB, change since the first look):%s", line); }
+        }
+
         void AppWatchThread(void *) {
             u64 last = ~UINT64_C(0);
             const bool info_ok = [] { SmUse sm_pm; return R_SUCCEEDED(::pminfoInitialize()); }();
@@ -377,6 +449,7 @@ namespace ams::mitm::applet {
                     LogLine("app watch: application pid %llu, program %016llx%s", static_cast<unsigned long long>(now),
                             static_cast<unsigned long long>(tid), g_app_excluded.load() ? " (EXCLUDED)" : "");
                     last = now;
+                    LogProcessMemory(now);
                 }
                 os::SleepThread(TimeSpan::FromMilliSeconds(100));
             }

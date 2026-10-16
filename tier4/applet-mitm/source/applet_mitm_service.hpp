@@ -136,6 +136,7 @@ namespace ams::mitm::applet {
 
     /* v0.7.1: libstratosphere's out-object session pairs, made through sm */
     Result CreateSessionViaSm(os::NativeHandle *out_server, os::NativeHandle *out_client);
+    u32 SessionsMadeViaSm();   /* v0.7.13 diagnostic */
 
     class ViManagerRootMitm : public sf::MitmServiceImplBase {
         public:

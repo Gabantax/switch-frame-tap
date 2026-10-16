@@ -313,6 +313,8 @@ namespace ams::mitm::applet {
         constexpr sm::ServiceName SessServiceName = sm::ServiceName::Encode("sftap:s");
     }
 
+    u32 SessionsMadeViaSm() { return g_sess_made; }
+
     Result CreateSessionViaSm(os::NativeHandle *out_server, os::NativeHandle *out_client) {
         std::scoped_lock lk(g_sess_lock);
         /* v0.7.10: this runs inside the game's request, on the thread that
@@ -329,7 +331,8 @@ namespace ams::mitm::applet {
         } tls_save;
         SmUse sm_use;   /* v0.7.10: sm only while needed (closed before tls_save restores) */
         if (g_sess_port == os::InvalidNativeHandle) {
-            if (const Result rc = sm::RegisterService(std::addressof(g_sess_port), SessServiceName, 64, false); R_FAILED(rc)) {
+            /* v0.7.13 test: 256, was 64 (#15: does the hang at ~15 apps move?) */
+            if (const Result rc = sm::RegisterService(std::addressof(g_sess_port), SessServiceName, 256, false); R_FAILED(rc)) {
                 g_sess_port = os::InvalidNativeHandle;
                 if (g_sess_fail++ < 4) { LogLine("sessions: could not register sftap:s rc=0x%x - creating them ourselves", rc.GetValue()); }
                 R_RETURN(rc);

@@ -252,6 +252,17 @@ namespace ams {
                 const s64 v = static_cast<s64>(scur >> 18);   /* 256 KB steps */
                 if (v != last_sys) { moved = true; last_sys = v; }
             }
+            /* v0.7.13 (#15): and its sessions, threads and events - a count
+             * that climbs with each app would end in a hang at the same app
+             * every time, with no memory moving */
+            u64 sc[3] = {}, sl[3] = {};
+            static s64 last_cnt[3] = { -1, -1, -1 };
+            static const svc::LimitableResource cres[3] = { svc::LimitableResource_SessionCountMax, svc::LimitableResource_ThreadCountMax, svc::LimitableResource_EventCountMax };
+            for (u32 k = 0; k < 3; ++k) {
+                if (R_SUCCEEDED(pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(sc[k]), std::addressof(sl[k]), pm::ResourceLimitGroup_System, cres[k]))) {
+                    if (static_cast<s64>(sc[k]) != last_cnt[k]) { moved = true; last_cnt[k] = static_cast<s64>(sc[k]); }
+                }
+            }
             /* v0.7.13: the most of the 1 MB malloc buffer ever in use, in 16 KB
              * steps - how small it can be made */
             {
@@ -264,9 +275,13 @@ namespace ams {
             }
             if (!moved && tag == nullptr) { return; }
             if (tag != nullptr) { mitm::applet::LogLine("applet group @ %s:", tag); }
-            mitm::applet::LogLine("system group: memory %llu/%llu KB used (%lld KB free)",
+            mitm::applet::LogLine("system group: memory %llu/%llu KB used (%lld KB free), sessions %llu/%llu, threads %llu/%llu, events %llu/%llu; sftap:s sessions made %u",
                                   static_cast<unsigned long long>(scur >> 10), static_cast<unsigned long long>(slim >> 10),
-                                  static_cast<long long>((static_cast<s64>(slim) - static_cast<s64>(scur)) / 1024));
+                                  static_cast<long long>((static_cast<s64>(slim) - static_cast<s64>(scur)) / 1024),
+                                  static_cast<unsigned long long>(sc[0]), static_cast<unsigned long long>(sl[0]),
+                                  static_cast<unsigned long long>(sc[1]), static_cast<unsigned long long>(sl[1]),
+                                  static_cast<unsigned long long>(sc[2]), static_cast<unsigned long long>(sl[2]),
+                                  mitm::applet::SessionsMadeViaSm());
             mitm::applet::LogLine("applet group: memory %llu/%llu MB, threads %llu/%llu, events %llu/%llu, transfer memories %llu/%llu, sessions %llu/%llu",
                                   static_cast<unsigned long long>(cur[0] >> 20), static_cast<unsigned long long>(lim[0] >> 20),
                                   static_cast<unsigned long long>(cur[1]), static_cast<unsigned long long>(lim[1]),
@@ -961,7 +976,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.13-test11: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.13-test12: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

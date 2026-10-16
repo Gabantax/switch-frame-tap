@@ -39,7 +39,8 @@
         "sftap:s",
         "pm:shell",
         "appletOE",
-        "lbl"
+        "lbl",
+        "dispdrv"
     ],
     "service_host": [
         "vi:u",
@@ -48,7 +49,8 @@
         "sftap",
         "sftap:s",
         "appletOE",
-        "lbl"
+        "lbl",
+        "dispdrv"
     ],
     "kernel_capabilities": [
         {

@@ -6,6 +6,7 @@
 #include "applet_mitm_gbuf.hpp"
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_control.hpp"
+#include "applet_mitm_uibinder.hpp"
 #include <atomic>
 
 namespace ams::mitm::applet {
@@ -103,6 +104,12 @@ namespace ams::mitm::applet {
             }
         }
 
+    }
+
+    /* v0.7.14 probe2: the same readers for the HOME menu's and applets' dispdrv traffic */
+    s32 ParseParcelSlot(const u8 *p, size_t sz) { return ParseQueueBufferSlot(p, sz); }
+    bool ParseParcelQueueInput(const u8 *p, size_t sz, u32 *n, u64 out[4], u32 *transform, s32 crop[4]) {
+        return ParseQueueBufferFence(p, sz, n, out, transform, crop);
     }
 
     /* ---- IHOSBinderDriver: the frame pipeline -------------------------- */

@@ -28,6 +28,7 @@
 #include "applet_mitm_audio.hpp"
 #include "applet_mitm_uvc.hpp"
 #include "applet_mitm_net.hpp"
+#include "applet_mitm_uibinder.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -89,6 +90,61 @@ namespace ams {
         alignas(os::ThreadStackAlignment) constinit u8 g_vi_stacks[ViThreads - 1][16_KB];   /* v0.7.13: 32, 5 used */
         constinit os::ThreadType g_vi_threads[ViThreads - 1];
         void ViLoopThread(void *) { mitm::applet::LoopProcessSafely(g_server_manager, "vi"); }
+
+        /* ---- v0.7.14 probe2: dispdrv, for the HOME menu's and applets' frames
+         * Research only (probe-ui.txt). Its own server: an applet's
+         * dequeueBuffer blocks inside nvnflinger until a buffer is free, so
+         * it must not hold a vi thread, and domains are allowed in case an
+         * applet converts its session (vi:u's server has none). */
+        enum UiPortIndex {
+            UiPortIndex_Dispdrv,
+            UiPortIndex_Count,
+        };
+        constexpr sm::ServiceName DispdrvServiceName = sm::ServiceName::Encode("dispdrv");
+        struct UiServerOptions {
+            static constexpr size_t PointerBufferSize   = 0x1000;
+            static constexpr size_t MaxDomains          = 4;
+            static constexpr size_t MaxDomainObjects    = 16;
+            static constexpr bool CanDeferInvokeRequest = false;
+            static constexpr bool CanManageMitmServers  = true;
+        };
+        constexpr size_t UiMaxSessions = 8;
+        constexpr size_t UiThreads = 3;
+        class UiServerManager final : public sf::hipc::ServerManager<UiPortIndex_Count, UiServerOptions, UiMaxSessions> {
+            private:
+                virtual Result OnNeedsToAccept(int port_index, Server *server) override;
+        };
+        UiServerManager g_ui_server_manager;
+        alignas(os::ThreadStackAlignment) constinit u8 g_ui_stacks[UiThreads][12_KB];
+        constinit os::ThreadType g_ui_threads[UiThreads];
+        void UiLoopThread(void *) { mitm::applet::LoopProcessSafely(g_ui_server_manager, "dispdrv"); }
+
+        /* our own dispdrv session first (taken before the mitm exists, so it
+         * is the real service), and its pointer buffer: a mitm session's
+         * must be at least as large or libstratosphere aborts on accept */
+        void StartUiBinderMitm() {
+            if (!mitm::applet::UiProbeOn()) { return; }
+            ::Service dd = {};
+            ::Result rc = 0;
+            {
+                mitm::applet::SmUse sm_dd;
+                rc = ::smGetService(std::addressof(dd), "dispdrv");
+            }
+            if (R_FAILED(rc)) { mitm::applet::LogLine("uiprobe: dispdrv not opened rc=0x%x - no dispdrv mitm, no binder look", rc); return; }
+            mitm::applet::LogLine("uiprobe: dispdrv opened, its pointer buffer %#x (ours %#zx)", static_cast<unsigned>(dd.pointer_buffer_size), UiServerOptions::PointerBufferSize);
+            mitm::applet::UiProbeSetDispdrv(dd);
+            if (!mitm::applet::UiProbeWants("dispdrv")) { mitm::applet::LogLine("uiprobe: dispdrv mitm off (nodispdrv)"); return; }
+            if (dd.pointer_buffer_size > UiServerOptions::PointerBufferSize) { mitm::applet::LogLine("uiprobe: dispdrv's pointer buffer is larger than ours - not wrapping it"); return; }
+            SFT_ABORT_UNLESS(g_ui_server_manager.RegisterMitmServer<mitm::applet::UiBinderMitm>(UiPortIndex_Dispdrv, DispdrvServiceName));
+            const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
+            for (size_t i = 0; i < UiThreads; ++i) {
+                SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_ui_threads[i]), UiLoopThread, nullptr, g_ui_stacks[i], sizeof(g_ui_stacks[i]), prio));
+                os::SetThreadNamePointer(std::addressof(g_ui_threads[i]), "applet-mitm.Ui");
+                os::StartThread(std::addressof(g_ui_threads[i]));
+                mitm::applet::NoteThread(std::addressof(g_ui_threads[i]));
+            }
+            mitm::applet::LogLine("uiprobe: registered mitm server for dispdrv (HOME menu and applets only - pass-through, logging), %zu threads", UiThreads);
+        }
 
         /* ---- M72: the grc recorder's own server --------------------------
          * Separate from vi:u on purpose. Anything forwarded for grc can block
@@ -912,6 +968,18 @@ namespace ams {
             }
         }
 
+        Result UiServerManager::OnNeedsToAccept(int port_index, Server *server) {
+            std::shared_ptr<::Service> fsrv;
+            sm::MitmProcessInfo client_info;
+            server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
+            AMS_ABORT_UNLESS(port_index == UiPortIndex_Dispdrv);
+            mitm::applet::LogLine("dispdrv accept program=%016llx forward pointer_buffer_size=%#x",
+                                  static_cast<unsigned long long>(client_info.program_id.value), static_cast<unsigned>(fsrv->pointer_buffer_size));
+            R_RETURN(this->AcceptMitmImpl(server,
+                sf::CreateSharedObjectEmplaced<mitm::applet::IUiBinderMitm, mitm::applet::UiBinderMitm>(decltype(fsrv)(fsrv), client_info),
+                fsrv));
+        }
+
 #if SFT_GRC_RESEARCH
         Result NvServerManager::OnNeedsToAccept(int port_index, Server *server) {
             std::shared_ptr<::Service> fsrv;
@@ -977,7 +1045,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14-probe1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.14-probe2: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1187,6 +1255,8 @@ namespace ams {
             }
             mitm::applet::LogLine("vi server: %zu threads, %zu sessions", ViThreads, MaxSessions);
         }
+        /* v0.7.14 research: off without probe-ui.txt */
+        StartUiBinderMitm();
         /* v0.7.10: drop the boot reference to sm (sm::Initialize). Our own sm
          * connection is charged to the Applet group and cost the applets one
          * of their 6 sessions - the web applet's (2210-1024). Every later use

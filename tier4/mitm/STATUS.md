@@ -128,6 +128,66 @@ process's framebuffer.
   Granting `svcDebugActiveProcess` in `syscalls` is necessary and not sufficient;
   `kern_svc_debug.cpp:38` also wants `force_debug`. M33 shipped without it.
 
+## *** v0.7.14 research: streaming the HOME menu and system applets ***
+
+Goal: stream what is on screen when no game is in front (HOME menu, user
+picker, controller settings, keyboard, Album...). Research builds only, off
+unless `sdmc:/config/switch-frame-tap/probe-ui.txt` exists.
+
+**probe1 (`logs/v0714-probe1`, measured):** the HOME menu (qlaunch), the user
+picker and the controller applet have **no frame buffers of their own** - no
+region of theirs is mapped by two devices (GPU + display). The overlay
+(overlayDisp) and the Album each do: one 7680 KB region, devices 2 = 2 x
+1280x768x4 (1280x720 RGBA8, block-linear rows rounded to 768). qlaunch's
+device-mapped memory is 6144 + 2872 + 544 + 908 KB, devices 1 (GPU pools).
+
+**Desk research (proven from firmware tables, not yet on hardware):**
+- Switch-Ghidra-Guides `ipc_json_dumps/22.5.0` (IPC tables per program of our
+  exact firmware): **qlaunch, overlayDisp, playerSelect and controller have no
+  vi service at all** - they present through `dispdrv`
+  (`nns::hosbinder::IHOSBinderDriver`, hosted by nvnflinger
+  `010000000000001C`), the same IGraphicBufferProducer protocol a game reaches
+  through vi:u's relay (dequeue/queueBuffer, slots, fences, crops). So the
+  machinery that streams games applies once we see that traffic.
+- qlaunch and overlayDisp open dispdrv at boot, before this module; a library
+  applet opens it when it starts - after us, so a dispdrv mitm sees it.
+- The pixels live in vi's **system shared buffer** ("fbshare": am
+  ISelfController 42/43 GetSystemShared{Layer,Buffer}Handle; vi:m
+  8200-8298). Emulators (eden) model it as one nvmap buffer of N x 1280x768x4
+  slots: 3 capture slots (last application, last foreground, caller applet)
+  then 2 per applet session. Owner process and slot count on hardware: unknown.
+- `caps:sc` is served by **vi**. Commands 3 `AttachSharedBufferToCaptureModule`
+  (8 bytes: a SharedBufferHandle) and 5 `CaptureRawImageToAttachedSharedBuffer`
+  (0x10 bytes) are how am captures the screen into the shared buffer; vi:m
+  8293 `GetDetachedSharedFrameBufferImage` (0x28 bytes in, type-6 out) copies a
+  slot out. The Phase-0 test of 3/5 sent a transfer-memory handle (wrong ABI),
+  which killed the session - **so they are untested, not dead**. A possible
+  post-composition route (whole screen, any layer stack) if the argument
+  layouts can be found.
+- IGraphicBufferProducer code 17 is GetBufferHistory (emulators: frame
+  number, queue and presentation times, state - no slot).
+
+**probe2 (v0.7.14-probe2, built, not yet run):**
+- `dispdrv` mitm in its own server (3 threads, domains allowed), HOME menu and
+  applets only (program ids 0x0100000000001000-1FFF), pass-through: logs each
+  binder's transactions, queueBuffer slot/crop/transform/fence, and the
+  NvGraphicBuffer of each slot (setPreallocatedBuffer input, or requestBuffer
+  forwarded by hand so its reply can be read). Registered only if dispdrv's
+  pointer buffer fits ours (0x1000) - libstratosphere aborts otherwise.
+- Memory map of every process (regions >= 2 MB) at idle and when a UI process
+  starts: which process holds the shared buffer.
+- At 240 s uptime, from our own dispdrv session: `query` on binder ids 1..N
+  (read-only) to find the HOME menu's layer, its GetBufferHistory reply, then
+  60 s of requestBuffer on its slots (succeeds only while a slot is dequeued)
+  - its buffer descriptors without seeing its traffic. Last in the boot: an
+  unknown binder id could upset nvnflinger.
+
+**Plan after probe2:** applets first (their traffic is visible now): read
+their slots the way games are read once the owner of the shared buffer is
+known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm
+(mitm.lst declares `dispdrv`, qlaunch only) that records presents for the
+main module, or the caps:sc 5 + vi 8293 route if its layouts can be learned.
+
 ## *** v0.7.10: manuals, news and the eShop work (memory donor) ***
 
 - **Report (SooraMaru, masagrator):** with the module installed, the browser

@@ -142,6 +142,7 @@ Type=Application
 Name=Switch Frame Tap
 Comment=Watch and record your Switch, streamed over USB or the network
 Exec=$BIN --app
+PrefersNonDefaultGPU=true
 Icon=switch-frame-tap
 Terminal=false
 Categories=Game;AudioVideo;

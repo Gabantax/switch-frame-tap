@@ -34,6 +34,7 @@ Type=Application
 Name=Switch Frame Tap
 Comment=Watch and play your Switch on this PC over USB
 Exec=$BIN --app
+PrefersNonDefaultGPU=true
 Icon=$ICON
 Terminal=false
 Categories=Game;

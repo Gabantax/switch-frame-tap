@@ -1498,6 +1498,27 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                     hs.qmax = w_qmax_seen; hs.w = (int)W; hs.h = (int)H;
                     hud_second(&hs);
                 }
+                /* v0.7.13: upscaling this GPU cannot keep up with (FSR to a 4K
+                 * TV on a laptop's integrated graphics: 60 fps decoded, 30
+                 * shown) - off for this session, said once; viewer.ini keeps
+                 * the choice, so a smaller screen next time tries again */
+                {
+                    static int slow_secs = 0;
+                    const double shown_fps = w_shown / secs, dec_fps = dec / secs;
+                    if (g_upscaler != UP_OFF && g_up.active && dec_fps >= 40 && dms < 10.0 && w_skipped > 0 && shown_fps < 0.8 * dec_fps) {
+                        if (++slow_secs >= 2) {
+                            char t[112];
+                            snprintf(t, sizeof(t), "Upscaling to %dx%d is too slow on this graphics card - turned off (U to try again)", g_up.out_w, g_up.out_h);
+                            fprintf(stderr, "\nupscaler: %s (%.0f of %.0f fps shown)\n", t, shown_fps, dec_fps);
+                            g_upscaler = UP_OFF;
+                            if (up_needs_swap(ren)) g_ren_swap = 1;
+                            hud_toast(t);
+                            slow_secs = 0;
+                        }
+                    } else {
+                        slow_secs = 0;
+                    }
+                }
                 w_a_bytes0 = g_a_bytes;
                 t_win = now; w_shown = w_skipped = 0; w_dec0 = s_decoded; w_bytes0 = s_bytes; w_dec_ms0 = s_dec_ms;
                 w_lat = w_age = w_gap = w_draw = 0; w_lat_n = w_age_n = 0; s_dec_max = 0; g_qmax = 0; w_qmax_seen = 0;

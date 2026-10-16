@@ -149,10 +149,13 @@ namespace ams::mitm::applet {
         u32 n = 0;
         { std::scoped_lock lk(g_lock); n = g_noted_n; }
         for (u32 k = 0; k < n; ++k) {
-            /* the stack as the thread uses it (an aliased stack's original is unmapped) */
-            const size_t size = g_noted[k]->stack_size;
-            const u8 *lo = static_cast<const u8 *>(g_noted[k]->stack);
-            if (lo == nullptr) { continue; }
+            /* the stack where the thread uses it: libnx maps it to a mirror
+             * and the original pages become unreadable (test9 read those and
+             * fataled the module, Data Abort) */
+            const ::Thread *impl = g_noted[k]->thread_impl;
+            if (impl == nullptr || impl->stack_mirror == nullptr) { continue; }
+            const size_t size = impl->stack_sz;
+            const u8 *lo = static_cast<const u8 *>(impl->stack_mirror);
             size_t untouched = 0;
             while (untouched < size && lo[untouched] == 0) { ++untouched; }
             const char *name = os::GetThreadNamePointer(g_noted[k]);

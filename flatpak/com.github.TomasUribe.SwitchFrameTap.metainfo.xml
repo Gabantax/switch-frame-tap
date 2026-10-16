@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.github.TomasUribe.SwitchFrameTap</id>
+  
+  <metadata_license>FSFAP</metadata_license>
+  
+  <project_license>GPL-2.0-only</project_license>
+  
+  <name>Switch Frame Tap</name>
+  <summary>Watch and record your Switch, streamed over USB or the network</summary>
+
+  <description>
+    <p>
+      Switch Frame Tap is a viewer that allows you to watch and record your Nintendo Switch, streamed over USB or the network.
+    </p>
+    <p>
+      The application features built-in hardware-accelerated decoding using FFmpeg (H.264, AAC, MP4), supports GPU decoding on Linux, and includes upscaling shaders like AMD FidelityFX FSR 1 and NVIDIA Image Scaling.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">com.github.TomasUribe.SwitchFrameTap.desktop</launchable>
+
+  <url type="homepage">https://github.com/TomasUribe/switch-frame-tap</url>
+  <url type="bugtracker">https://github.com/TomasUribe/switch-frame-tap/issues</url>
+  <url type="donation">https://buymeacoffee.com/papux200</url>
+
+  <developer id="com.github.TomasUribe">
+    <name>Tomas Uribe</name>
+  </developer>
+
+  <provides>
+    <binary>switch-frame-tap-viewer</binary>
+  </provides>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Switch Frame Tap in Aktion</caption>
+      <image>https://raw.githubusercontent.com/TomasUribe/switch-frame-tap/master/docs/hero-switch-to-pc.jpg</image>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1"/>
+
+  <!-- Aktuelles Release eintragen -->
+  <releases>
+    <release version="0.7.13" date="2026-10-15">
+      <description>
+        <ul>
+          <li>Fixed black screen after launching many apps in a row.</li>
+          <li>Fixed boot crash on consoles with several sysmodules.</li>
+          <li>Super Mario Odyssey and similar games fill the stream in handheld instead of sitting in the top-left corner.</li>
+          <li>Uses much less system memory.</li>
+          <li>GPU decoding is on by default on Windows (D3D11VA) and Linux.</li>
+          <li>Smoother over Wi-Fi: the network stream sends a keyframe only every 4 s.</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

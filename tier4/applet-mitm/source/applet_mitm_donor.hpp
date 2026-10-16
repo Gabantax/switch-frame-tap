@@ -40,6 +40,10 @@ namespace ams::mitm::applet {
 
     /* sftap commands 10 / 11, from the donor */
     void DonorAccept(u64 size, os::NativeHandle tmem);
+    /* v0.7.13: command 12 also brings nvdrv's transfer memory; the engines
+     * take it (and then own the handle) */
+    void DonorAcceptNv(u64 size, os::NativeHandle tmem);
+    bool DonorTakeNvTmem(os::NativeHandle *out, u64 *out_size);
     void DonorFailed(u32 rc);
 
 }

@@ -55,7 +55,7 @@ namespace ams::mitm::applet {
         struct AmServerOptions {
             static constexpr size_t PointerBufferSize   = 0x1000;
             static constexpr size_t MaxDomains          = 8;   /* v0.7.13: 4 - two apps' worth of headroom more */
-            static constexpr size_t MaxDomainObjects    = 0x1000;
+            static constexpr size_t MaxDomainObjects    = 0x200;   /* v0.7.13: 0x1000 - am's ids ran 34-47 over 15 apps (test9) */
             static constexpr bool CanDeferInvokeRequest = false;
             static constexpr bool CanManageMitmServers  = true;
         };
@@ -71,7 +71,7 @@ namespace ams::mitm::applet {
         /* two threads: CreateLibraryApplet may wait ~0.1-1.5 s for the
          * stream to stop, and the game's other am calls must not queue behind it */
         constexpr size_t AmThreads = 2;
-        alignas(os::ThreadStackAlignment) constinit u8 g_am_stacks[AmThreads][16_KB];
+        alignas(os::ThreadStackAlignment) constinit u8 g_am_stacks[AmThreads][12_KB];   /* v0.7.13: 16, 4 used (test9) */
         constinit os::ThreadType g_am_threads[AmThreads];
         void AmLoopThread(void *) { LoopProcessSafely(g_am_server_manager, "am"); }
 

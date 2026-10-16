@@ -96,6 +96,15 @@ namespace ams::mitm::applet {
                     tmem.Detach();
                     R_SUCCEED();
                 }
+                /* v0.7.13: and the nvdrv session's transfer memory, from the
+                 * same Applet-pool heap - not 256 KB of our System group */
+                Result Donate2(u64 size, u64 nv_size, sf::CopyHandle &&tmem, sf::CopyHandle &&nv_tmem) {
+                    DonorAcceptNv(nv_size, nv_tmem.GetOsHandle());
+                    nv_tmem.Detach();
+                    DonorAccept(size, tmem.GetOsHandle());
+                    tmem.Detach();
+                    R_SUCCEED();
+                }
                 Result DonateFailed(u32 rc) {
                     DonorFailed(rc);
                     R_SUCCEED();
@@ -124,7 +133,7 @@ namespace ams::mitm::applet {
         sf::hipc::ServerManager<1, ControlServerOptions, ControlMaxSessions> g_control_manager;
         constinit sf::UnmanagedServiceObject<IStreamControl, StreamControl> g_control_object;
 
-        alignas(os::ThreadStackAlignment) constinit u8 g_control_stack[16_KB];
+        alignas(os::ThreadStackAlignment) constinit u8 g_control_stack[8_KB];   /* v0.7.13: 16, 2 used */
         constinit os::ThreadType g_control_thread;
 
         void ControlThread(void *) {

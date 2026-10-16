@@ -108,8 +108,8 @@ namespace ams::mitm::applet {
          * our own memory - it cannot live in the donor's (applet_mitm_donor):
          * transfer memory cannot be made from memory that is itself lent
          * (vb:2_tmem failed, test10). */
-        constexpr size_t NvTmemSize = 0x40000;
-        alignas(0x1000) constinit u8 g_nv_tmem_buf[NvTmemSize] = {};
+        /* v0.7.13: nvdrv's transfer memory (256 KB) comes from the donor with
+         * its heap (sftap command 12) - it was .bss, in the System group */
 
         /* VIC buffers live on the REAL process heap, not in .bss.
          *
@@ -177,7 +177,20 @@ namespace ams::mitm::applet {
         constinit u8       *g_vic_dst_buf = nullptr;
         constinit u8       *g_vic_src_buf = nullptr;
         constinit u8       *g_ind_buf     = nullptr;
-        constinit u8       *g_shot_out    = nullptr;   /* v0.7.13: ShotOutBufSize past g_ind_size */
+        /* v0.7.13: past the stream's g_ind_size, the capture region's tail holds
+         * the screenshot PNG's buffer, the audio stage and the audio ring -
+         * memory from the donor while a viewer is connected, instead of 224 KB
+         * of .bss in the System group the boot needs (#15) */
+        constexpr size_t AudioStageSize = 32 * 1024;   /* ~170 ms - more than a frame ever carries */
+        constexpr size_t CaptureTailBytes = ShotOutBufSize + AudioStageSize + AudioRingBytes;
+        constinit u8       *g_shot_out    = nullptr;
+        constinit u8       *g_audio_stage = nullptr;
+        constinit u8       *g_audio_ring  = nullptr;
+        void SetCaptureTail(u8 *tail) {
+            g_shot_out    = tail;
+            g_audio_stage = tail != nullptr ? tail + ShotOutBufSize : nullptr;
+            g_audio_ring  = tail != nullptr ? tail + ShotOutBufSize + AudioStageSize : nullptr;
+        }
         /* cached heap past the nvmap'd block-row, used to stage uncached engine
          * output before it goes to the filesystem */
         constinit u8       *g_stage_buf   = nullptr;
@@ -190,8 +203,7 @@ namespace ams::mitm::applet {
          * header cannot be posted from the stack. */
         alignas(0x1000) constinit u8 g_usb_hdr[0x1000] = {};
         /* v0.3: queued game audio, sent as its own packet before each frame */
-        constexpr size_t AudioStageSize = 32_KB;       /* ~170 ms - more than a frame ever carries */
-        alignas(0x1000) constinit u8 g_audio_stage[AudioStageSize] = {};
+
 
         /* M54: the decisive measurement. LogMemoryPools() in applet_mitm_main.cpp
          * is in an anonymous namespace, so it cannot be reached from here - this
@@ -233,7 +245,7 @@ namespace ams::mitm::applet {
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
             g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x350000);
             g_ind_buf = nullptr;
-            g_shot_out = nullptr;
+            SetCaptureTail(nullptr);
             g_ind_size = 0;
             g_stage_buf = nullptr;
             g_stream_stage[0] = g_stream_stage[1] = nullptr;
@@ -344,7 +356,7 @@ namespace ams::mitm::applet {
             g_vic_dst_buf = reinterpret_cast<u8 *>(addr + 0x10000);
             g_vic_src_buf = reinterpret_cast<u8 *>(addr + 0x350000);
             g_ind_buf = nullptr;
-            g_shot_out = nullptr;
+            SetCaptureTail(nullptr);
             g_ind_size = 0;
             g_stage_buf = nullptr;
             g_stream_stage[0] = g_stream_stage[1] = nullptr;
@@ -368,10 +380,10 @@ namespace ams::mitm::applet {
             if (g_ind_buf != nullptr) { return true; }
             if (g_vic_heap == 0) { return false; }
             if (g_donor_mode) {
-                const size_t cap = g_vic_heap_size - VicBaseHeap - ShotOutBufSize;
+                const size_t cap = g_vic_heap_size - VicBaseHeap - CaptureTailBytes;
                 g_ind_buf  = reinterpret_cast<u8 *>(g_vic_heap + VicBaseHeap);
                 g_ind_size = cap;
-                g_shot_out = g_ind_buf + cap;   /* v0.7.13: the screenshot PNG's buffer, past the stream's */
+                SetCaptureTail(g_ind_buf + cap);
                 g_stage_buf = g_ind_buf + FbBlockRowStage;
                 g_stream_stage[0] = g_stage_buf + StreamStageSize;
                 g_stream_stage[1] = g_stream_stage[0] + StreamStageSize;
@@ -387,7 +399,7 @@ namespace ams::mitm::applet {
             }
             if (total == 0) { LogLine("   %s: capture memory: no heap size accepted - the Applet pool is short (an applet open?)", who); return false; }
             const size_t block = total - VicBaseHeap;
-            const size_t cap = block - ShotOutBufSize;
+            const size_t cap = block - CaptureTailBytes;
             uintptr_t addr = 0;
             if (const auto rc = os::AllocateMemoryBlock(std::addressof(addr), block); R_FAILED(rc)) {
                 LogLine("   %s: capture memory: AllocateMemoryBlock(%zu MB) rc=0x%x", who, cap / (1024 * 1024), rc.GetValue());
@@ -396,7 +408,7 @@ namespace ams::mitm::applet {
             }
             g_ind_buf  = reinterpret_cast<u8 *>(addr);
             g_ind_size = cap;
-            g_shot_out = g_ind_buf + cap;
+            SetCaptureTail(g_ind_buf + cap);
             g_stage_buf = g_ind_buf + FbBlockRowStage;
             g_stream_stage[0] = g_stage_buf + StreamStageSize;
             g_stream_stage[1] = g_stream_stage[0] + StreamStageSize;
@@ -421,18 +433,18 @@ namespace ams::mitm::applet {
             if (g_donor_mode) {
                 /* the donor's memory stays mapped (experiment 1) */
                 g_ind_buf = nullptr;
-                g_shot_out = nullptr;
+                SetCaptureTail(nullptr);
                 g_ind_size = 0;
                 g_stage_buf = nullptr;
                 g_stream_stage[0] = g_stream_stage[1] = nullptr;
                 LogLine("   %s: capture memory (donor) released", who);
                 return;
             }
-            os::FreeMemoryBlock(reinterpret_cast<uintptr_t>(g_ind_buf), g_ind_size + ShotOutBufSize);
+            os::FreeMemoryBlock(reinterpret_cast<uintptr_t>(g_ind_buf), g_ind_size + CaptureTailBytes);
             const auto rc = os::SetMemoryHeapSize(VicBaseHeap);
             LogLine("   %s: capture memory given back (%zu MB), heap back to %zu MB rc=0x%x", who, g_ind_size / (1024 * 1024), VicBaseHeap / (1024 * 1024), rc.GetValue());
             g_ind_buf = nullptr;
-            g_shot_out = nullptr;
+            SetCaptureTail(nullptr);
             g_ind_size = 0;
             g_stage_buf = nullptr;
             g_stream_stage[0] = g_stream_stage[1] = nullptr;
@@ -452,7 +464,8 @@ namespace ams::mitm::applet {
         static_assert(DstSize <= VicDstSize);
 
         constinit ::Service        g_nv_srv  = {};
-        constinit ::TransferMemory g_nv_tmem = {};
+        constinit os::NativeHandle g_nv_tmem_handle = os::InvalidNativeHandle;
+        constinit u64 g_nv_tmem_size = 0;
 
         /* Linux-style ioctl encoding: (dir<<30)|(size<<16)|(type<<8)|nr, IOWR dir=3 */
         constexpr u32 MakeIowr(u32 type, u32 nr, u32 size) {
@@ -1542,7 +1555,7 @@ namespace ams::mitm::applet {
          * waits for the next viewer) */
         constinit std::atomic<bool> g_rearm{false};
         constinit s32 g_last_slot = 0;
-        alignas(os::ThreadStackAlignment) constinit u8 g_vic_stack[32_KB];
+        alignas(os::ThreadStackAlignment) constinit u8 g_vic_stack[24_KB];   /* v0.7.13: 32, 10 used streaming with screenshots */
         constinit os::ThreadType g_vic_thread;
 
     void RunVicBlit(s32 slot) {
@@ -1642,15 +1655,18 @@ namespace ams::mitm::applet {
         if (R_FAILED(rc)) { VicStage("vb:1_FAILED"); return; }
 
         VicStage("vb:2_tmem");
-        rc = tmemCreateFromMemory(std::addressof(g_nv_tmem), g_nv_tmem_buf, NvTmemSize, Perm_None);
-        if (R_FAILED(rc)) { LogLine("   nvdrv transfer memory rc=0x%x", rc); VicStage("vb:2_FAILED"); serviceClose(std::addressof(g_nv_srv)); return; }
+        u64 &nv_tmem_size = g_nv_tmem_size;
+        if (!DonorTakeNvTmem(std::addressof(g_nv_tmem_handle), std::addressof(nv_tmem_size))) {
+            LogLine("   nvdrv transfer memory: none came with the donor's memory - no engines");
+            VicStage("vb:2_FAILED"); serviceClose(std::addressof(g_nv_srv)); return;
+        }
 
         VicStage("vb:3_Initialize");
         {
-            const u32 tmem_size = static_cast<u32>(NvTmemSize);
+            const u32 tmem_size = static_cast<u32>(nv_tmem_size);
             rc = serviceDispatchIn(std::addressof(g_nv_srv), 3, tmem_size,
                 .in_num_handles = 2,
-                .in_handles     = { CUR_PROCESS_HANDLE, g_nv_tmem.handle });
+                .in_handles     = { CUR_PROCESS_HANDLE, g_nv_tmem_handle });
             LogLine("   Initialize rc=0x%x", rc);
             if (R_FAILED(rc)) { VicStage("vb:3_FAILED"); goto close_sess; }
         }
@@ -1910,7 +1926,9 @@ namespace ams::mitm::applet {
         NvClose(vfd);
     close_sess:
         serviceClose(std::addressof(g_nv_srv));
-        tmemClose(std::addressof(g_nv_tmem));
+        /* back with the donor's memory: closed when the donor goes, or used
+         * again if that memory is kept for the next stream (an unmap refused) */
+        if (g_nv_tmem_handle != os::InvalidNativeHandle) { DonorAcceptNv(g_nv_tmem_size, g_nv_tmem_handle); g_nv_tmem_handle = os::InvalidNativeHandle; }
         VicStage("vb:released");
         /* v0.7.10: closing the nvdrv session freed every fd and nvmap handle
          * on the donor's memory; unmap it, end the donor, and let the worker
@@ -1922,7 +1940,7 @@ namespace ams::mitm::applet {
             g_vic_heap_size = 0;
             g_vic_cfg_buf = g_vic_cmd_buf = g_vic_dst_buf = g_vic_src_buf = nullptr;
             g_ind_buf = nullptr;
-            g_shot_out = nullptr;
+            SetCaptureTail(nullptr);
             g_ind_size = 0;
             g_stage_buf = nullptr;
             g_stream_stage[0] = g_stream_stage[1] = nullptr;
@@ -6633,8 +6651,8 @@ namespace ams::mitm::applet {
             u32 audio_seq = 0;
             u64 audio_bytes = 0;
             /* v0.3: game audio rides along while this stream runs */
-            if (live && !uvc) { AudioFlush(); g_audio_active.store(g_audio_enabled.load(std::memory_order_relaxed), std::memory_order_relaxed); }
-            ON_SCOPE_EXIT { g_audio_active.store(false, std::memory_order_relaxed); };
+            if (live && !uvc) { AudioAttachRing(g_audio_ring); g_audio_active.store(g_audio_enabled.load(std::memory_order_relaxed), std::memory_order_relaxed); }
+            ON_SCOPE_EXIT { g_audio_active.store(false, std::memory_order_relaxed); AudioDetachRing(); };
             u32 idrs = 0, pos = 0, n_i = 0, n_p = 0, last_sent = ~0u, last_vic = ~0u, last_pos = 0;
             bool pending = false, stalled = false, need_idr = true;
             bool said_long_gop = false;    /* v0.7.13 */
@@ -6759,7 +6777,7 @@ namespace ams::mitm::applet {
                  * nothing else is in flight on the endpoint at this point.
                  * flags bit 3: 16-bit stereo PCM; width = rate, height = channels. */
                 if (live && g_audio_active.load(std::memory_order_relaxed)) {
-                    const size_t an = AudioTake(g_audio_stage, AudioStageSize);
+                    const size_t an = g_audio_stage != nullptr ? AudioTake(g_audio_stage, AudioStageSize) : 0;
                     if (an != 0) {
                         SftHdrWire ah = {};
                         ah.magic = 0x52544653u;

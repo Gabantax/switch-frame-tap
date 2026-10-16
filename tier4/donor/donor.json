@@ -65,6 +65,7 @@
                 "svcOutputDebugString": "0x27",
                 "svcReturnFromException": "0x28",
                 "svcGetInfo": "0x29",
+                "svcGetProcessList": "0x65",
                 "svcWaitForAddress": "0x34",
                 "svcSignalToAddress": "0x35"
             }

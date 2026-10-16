@@ -58,7 +58,7 @@ namespace ams::mitm::applet {
             }
         };
 
-               alignas(os::ThreadStackAlignment) constinit u8 g_input_stack[16_KB];
+               alignas(os::ThreadStackAlignment) constinit u8 g_input_stack[8_KB];   /* v0.7.13: 16, 3 used */
         constinit os::ThreadType g_input_thread;
 
         void InputThread(void *) {

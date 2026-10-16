@@ -43,11 +43,11 @@ namespace ams {
 
     namespace {
 
-        /* v0.7.13: 128 KB, was 1 MB - every custom sysmodule shares a few MB
+        /* v0.7.13: 96 KB, was 1 MB - every custom sysmodule shares a few MB
          * of the System group with am (#15), and the most ever in use was
          * 17 KB (Run v0713-ballast4-late: a game, the HOME menu, applets),
          * plus SyncSoundPatches' 44 KB for a moment at boot */
-        constexpr size_t MallocBufferSize = 128_KB;
+        constexpr size_t MallocBufferSize = 96_KB;
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];
 
         enum PortIndex {
@@ -86,7 +86,7 @@ namespace ams {
          * same "one blocked call ties up one thread of several" design the grc
          * server below uses. */
         constexpr size_t ViThreads = 4;     /* this one and three more */
-        alignas(os::ThreadStackAlignment) constinit u8 g_vi_stacks[ViThreads - 1][32_KB];
+        alignas(os::ThreadStackAlignment) constinit u8 g_vi_stacks[ViThreads - 1][16_KB];   /* v0.7.13: 32, 5 used */
         constinit os::ThreadType g_vi_threads[ViThreads - 1];
         void ViLoopThread(void *) { mitm::applet::LoopProcessSafely(g_server_manager, "vi"); }
 
@@ -220,7 +220,7 @@ namespace ams {
          * This thread is independent of the dispatch path. LogMark rewrites
          * sdmc:/applet-mitm.last whole, so even after a forced power-off the
          * last committed beat tells us how long the process lived. */
-        alignas(os::ThreadStackAlignment) constinit u8 g_hb_stack[16_KB];
+        alignas(os::ThreadStackAlignment) constinit u8 g_hb_stack[8_KB];   /* v0.7.13: 16, 4 used */
         constinit os::ThreadType g_hb_thread;
         constinit std::atomic<bool> g_screen_off{false};   /* v0.7.12: config screen_off = 1 */
 
@@ -961,7 +961,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.13-test9: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.13-test10: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

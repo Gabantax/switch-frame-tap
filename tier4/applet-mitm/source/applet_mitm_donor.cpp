@@ -13,6 +13,8 @@ namespace ams::mitm::applet {
         constinit std::atomic<int> g_state{0};
         constinit os::NativeHandle g_handle = os::InvalidNativeHandle;
         constinit u64 g_size = 0;
+        constinit os::NativeHandle g_nv_handle = os::InvalidNativeHandle;   /* v0.7.13 */
+        constinit u64 g_nv_size = 0;
         constinit u32 g_fail_rc = 0;
         constinit u64 g_pid = 0;
         constinit os::TransferMemoryType g_tmem = {};
@@ -25,6 +27,8 @@ namespace ams::mitm::applet {
         constinit bool g_pmshell_open = false;
 
         void TerminateDonor() {
+            /* an nvdrv transfer memory the engines never took */
+            if (g_nv_handle != os::InvalidNativeHandle) { os::CloseNativeHandle(g_nv_handle); g_nv_handle = os::InvalidNativeHandle; }
             if (g_pid == 0) { return; }
             ::Result rc = 0;
             if (g_pmshell_open) {
@@ -126,6 +130,21 @@ namespace ams::mitm::applet {
         g_handle = tmem;
         g_size = size;
         g_state.store(1);
+    }
+
+    void DonorAcceptNv(u64 size, os::NativeHandle tmem) {
+        if (g_nv_handle != os::InvalidNativeHandle) { os::CloseNativeHandle(g_nv_handle); }
+        g_nv_handle = tmem;
+        g_nv_size = size;
+    }
+
+    bool DonorTakeNvTmem(os::NativeHandle *out, u64 *out_size) {
+        std::scoped_lock lk(g_lock);
+        if (g_nv_handle == os::InvalidNativeHandle) { return false; }
+        *out = g_nv_handle;
+        *out_size = g_nv_size;
+        g_nv_handle = os::InvalidNativeHandle;
+        return true;
     }
 
     void DonorFailed(u32 rc) {

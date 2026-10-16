@@ -99,6 +99,72 @@ static u64 TestLessBytes(FsFileSystem *sd) {
     return (u64)strtoul(b, NULL, 10) << 20;
 }
 
+/* v0.7.13: the sysmodules from the SD card (atmosphere/contents/<id>/exefs.nsp)
+ * that are running, and the memory each uses - for "turn one off" to have a
+ * name. Biggest first, appended to text as "others=name KB; ...". */
+typedef struct { u64 id; u64 bytes; char name[40]; } Other;
+
+static void ToolboxName(FsFileSystem *sd, u64 id, char *out, size_t cap) {
+    snprintf(out, cap, "%016llx", (unsigned long long)id);
+    char path[96];
+    snprintf(path, sizeof(path), "/atmosphere/contents/%016llx/toolbox.json", (unsigned long long)id);
+    FsFile f;
+    if (R_FAILED(fsFsOpenFile(sd, path, FsOpenMode_Read, &f))) { return; }
+    char b[512] = { 0 };
+    u64 n = 0;
+    fsFileRead(&f, 0, b, sizeof(b) - 1, FsReadOption_None, &n);
+    fsFileClose(&f);
+    const char *k = strstr(b, "\"name\"");
+    const char *q = k != NULL ? strchr(k + 6, '"') : NULL;
+    const char *e = q != NULL ? strchr(q + 1, '"') : NULL;
+    if (q == NULL || e == NULL || e - q - 1 <= 0) { return; }
+    size_t len = (size_t)(e - q - 1);
+    if (len >= cap) { len = cap - 1; }
+    memcpy(out, q + 1, len);
+    out[len] = 0;
+}
+
+static int AppendOthers(FsFileSystem *sd, char *text, size_t cap) {
+    static u64 pids[96];
+    s32 np = 0;
+    if (R_FAILED(svcGetProcessList(&np, pids, 96))) { return 0; }
+    static Other o[24];
+    int no = 0;
+    for (s32 i = 0; i < np && no < 24; ++i) {
+        Handle h = INVALID_HANDLE;
+        struct { u64 program_id; u8 storage; u8 pad[7]; u64 keys; u64 flags; } out;
+        memset(&out, 0, sizeof(out));
+        if (R_FAILED(serviceDispatchInOut(pmdmntGetServiceSession(), 65000, pids[i], out,
+                .out_handle_attrs = { SfOutHandleAttr_HipcCopy }, .out_handles = &h))) { continue; }
+        char path[96];
+        snprintf(path, sizeof(path), "/atmosphere/contents/%016llx/exefs.nsp", (unsigned long long)out.program_id);
+        FsDirEntryType t;
+        if (out.program_id != 0x0100000000000C21ull && R_SUCCEEDED(fsFsGetEntryType(sd, path, &t))) {
+            u64 used = 0;
+            if (R_SUCCEEDED(svcGetInfo(&used, InfoType_UsedMemorySize, h, 0))) {
+                o[no].id = out.program_id;
+                o[no].bytes = used;
+                if (out.program_id == SFT_TID) { snprintf(o[no].name, sizeof(o[no].name), "Switch Frame Tap"); }
+                else { ToolboxName(sd, out.program_id, o[no].name, sizeof(o[no].name)); }
+                ++no;
+            }
+        }
+        svcCloseHandle(h);
+    }
+    /* biggest first */
+    for (int a = 0; a < no; ++a) {
+        for (int b = a + 1; b < no; ++b) {
+            if (o[b].bytes > o[a].bytes) { const Other x = o[a]; o[a] = o[b]; o[b] = x; }
+        }
+    }
+    int len = snprintf(text, cap, "others=");
+    for (int a = 0; a < no && len > 0 && (size_t)len < cap; ++a) {
+        len += snprintf(text + len, cap - len, "%s%s %llu KB", a ? "; " : "", o[a].name, (unsigned long long)(o[a].bytes / 1024));
+    }
+    if (len > 0 && (size_t)len < cap) { len += snprintf(text + len, cap - len, "\n"); }
+    return len;
+}
+
 void Launcher(void) {
     FsFileSystem sd;
     const bool have_sd = R_SUCCEEDED(fsInitialize()) && R_SUCCEEDED(fsOpenSdCardFileSystem(&sd));
@@ -124,7 +190,7 @@ void Launcher(void) {
     const s64 free_b = (lim - cur) - (s64)less;
     const u64 now = UptimeMs();
 
-    char text[768];
+    char text[1536];
     int len = snprintf(text, sizeof(text),
                        "Switch Frame Tap launcher, %llu.%llu s after boot: HOME menu %s; system memory %lld KB free of %lld KB%s; "
                        "the sysmodule needs %llu KB (%s) and %llu KB to spare.\n",
@@ -153,6 +219,8 @@ void Launcher(void) {
         snprintf(text + len, sizeof(text) - len, "result=%s\nStarted (rc=0x%x).\n", R_SUCCEEDED(rc) ? "started" : "failed", rc);
     }
     if (have_sd) {
+        const size_t used = strlen(text);
+        AppendOthers(&sd, text + used, sizeof(text) - used);
         WriteText(&sd, "/config/switch-frame-tap/launcher.txt", text);
         fsFsClose(&sd);
     }

@@ -23,6 +23,12 @@ namespace ams::mitm::applet {
     void StartAudio();
 
     /* copies up to max bytes of queued PCM (whole 4-byte frames) into dst */
+    /* v0.7.13: the ring (AudioRingBytes) is the stream's memory - the capture
+     * region's tail, from the donor - attached while a stream runs, not 64 KB
+     * of .bss in the System group */
+    constexpr size_t AudioRingBytes = 64 * 1024;
+    void AudioAttachRing(u8 *ring);
+    void AudioDetachRing();
     size_t AudioTake(u8 *dst, size_t max);
 
     /* drop everything queued (a stream ended, or started) */

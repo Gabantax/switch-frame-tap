@@ -71,14 +71,27 @@ int main(int argc, char **argv) {
         if (R_SUCCEEDED(svcSetHeapSize(&addr, (u64)sizes_mb[i] << 20))) { size = (u64)sizes_mb[i] << 20; break; }
     }
 
-    Handle tmem = INVALID_HANDLE;
-    Result rc = size != 0 ? svcCreateTransferMemory(&tmem, addr, size, Perm_None) : MAKERESULT(Module_Libnx, LibnxError_OutOfMemory);
-    /* Donate (cmd 10, the handle copied), or DonateFailed (cmd 11) so the
-     * module stops waiting and logs why */
+    Handle tmem = INVALID_HANDLE, nv_tmem = INVALID_HANDLE;
+    /* v0.7.13: the top 256 KB is nvdrv's transfer memory for the module's
+     * engines (Donate2, cmd 12) - it was 256 KB of the module's own memory,
+     * in the System group sysmodules share with am */
+    const u64 nv_size = 0x40000;
+    Result rc = size > nv_size ? svcCreateTransferMemory(&tmem, addr, size - nv_size, Perm_None) : MAKERESULT(Module_Libnx, LibnxError_OutOfMemory);
+    if (R_SUCCEEDED(rc)) { rc = svcCreateTransferMemory(&nv_tmem, (u8 *)addr + size - nv_size, nv_size, Perm_None); }
     if (R_SUCCEEDED(rc)) {
-        serviceDispatchIn(&ctl, 10, size, .in_num_handles = 1, .in_handles = { tmem });
-        svcCloseHandle(tmem);   /* the module holds its own copy; the memory stays lent */
+        const struct { u64 size, nv_size; } in = { size - nv_size, nv_size };
+        const Result drc = serviceDispatchIn(&ctl, 12, in, .in_num_handles = 2, .in_handles = { tmem, nv_tmem });
+        svcCloseHandle(tmem);   /* the module holds its own copies; the memory stays lent */
+        svcCloseHandle(nv_tmem);
+        if (R_FAILED(drc)) {
+            /* a module before v0.7.13: the whole heap, as one (cmd 10) */
+            if (R_SUCCEEDED(svcCreateTransferMemory(&tmem, addr, size, Perm_None))) {
+                serviceDispatchIn(&ctl, 10, size, .in_num_handles = 1, .in_handles = { tmem });
+                svcCloseHandle(tmem);
+            }
+        }
     } else {
+        if (tmem != INVALID_HANDLE) { svcCloseHandle(tmem); }
         const u32 urc = rc;
         serviceDispatchIn(&ctl, 11, urc);
     }

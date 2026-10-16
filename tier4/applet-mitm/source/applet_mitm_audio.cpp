@@ -18,18 +18,23 @@ namespace ams::mitm::applet {
         constinit bool g_begin_called = false;
 
         /* one reader, one taker: a single-producer single-consumer byte ring */
-        constexpr size_t RingSize = 64_KB;            /* ~340 ms of 48 kHz stereo s16 */
-        alignas(64) constinit u8 g_ring[RingSize];
+        constexpr size_t RingSize = AudioRingBytes;   /* ~340 ms of 48 kHz stereo s16 */
+        constinit std::atomic<u8 *> g_ring{nullptr};   /* while a stream runs */
+        constinit std::atomic<u32> g_ring_users{0};    /* Push inside it */
         constinit std::atomic<size_t> g_head{0};      /* written by the reader */
         constinit std::atomic<size_t> g_tail{0};      /* written by the taker */
 
         constexpr size_t ChunkSize = 0x1000;          /* what the official software asks for */
         alignas(0x1000) constinit u8 g_chunk[ChunkSize];
 
-        alignas(os::ThreadStackAlignment) constinit u8 g_audio_stack[16_KB];
+        alignas(os::ThreadStackAlignment) constinit u8 g_audio_stack[8_KB];   /* v0.7.13: 16, 3 used */
         constinit os::ThreadType g_audio_thread;
 
         void Push(const u8 *p, size_t n) {
+            g_ring_users.fetch_add(1);
+            ON_SCOPE_EXIT { g_ring_users.fetch_sub(1); };
+            u8 *const ring = g_ring.load();
+            if (ring == nullptr) { return; }
             size_t head = g_head.load(std::memory_order_relaxed);
             const size_t tail = g_tail.load(std::memory_order_acquire);
             if (n > RingSize - 4) { return; }
@@ -39,7 +44,7 @@ namespace ams::mitm::applet {
             for (size_t i = 0; i < n; ) {
                 const size_t at = (head + i) % RingSize;
                 const size_t k = (RingSize - at) < (n - i) ? (RingSize - at) : (n - i);
-                std::memcpy(g_ring + at, p + i, k);
+                std::memcpy(ring + at, p + i, k);
                 i += k;
             }
             g_head.store(head + n, std::memory_order_release);
@@ -118,7 +123,19 @@ namespace ams::mitm::applet {
         NoteThread(std::addressof(g_audio_thread));
     }
 
+    void AudioAttachRing(u8 *ring) {
+        AudioFlush();
+        g_ring.store(ring);
+    }
+
+    void AudioDetachRing() {
+        g_ring.store(nullptr);
+        while (g_ring_users.load() != 0) { os::SleepThread(TimeSpan::FromMilliSeconds(1)); }
+    }
+
     size_t AudioTake(u8 *dst, size_t max) {
+        u8 *const ring = g_ring.load();
+        if (ring == nullptr) { return 0; }
         const size_t head = g_head.load(std::memory_order_acquire);
         size_t tail = g_tail.load(std::memory_order_relaxed);
         size_t n = head - tail;
@@ -127,7 +144,7 @@ namespace ams::mitm::applet {
         for (size_t i = 0; i < n; ) {
             const size_t at = (tail + i) % RingSize;
             const size_t k = (RingSize - at) < (n - i) ? (RingSize - at) : (n - i);
-            std::memcpy(dst + i, g_ring + at, k);
+            std::memcpy(dst + i, ring + at, k);
             i += k;
         }
         g_tail.store(tail + n, std::memory_order_release);

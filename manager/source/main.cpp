@@ -24,6 +24,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <functional>
@@ -34,7 +35,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.7.13-test9";
+    constexpr const char *AppVersion  = "0.7.13-test10";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -748,6 +749,33 @@ namespace {
                   "is connected lends it the streaming memory, so that game manuals, news and the eShop work whenever you are not streaming.");
             check("Overlay", "sdmc:/switch/.overlays/switch-frame-tap.ovl", false,
                   "switch/.overlays/switch-frame-tap.ovl - stream on/off and handheld/docked from inside a game (needs the Tesla overlay loader).");
+            /* v0.7.13: the launcher's view of this boot - the memory sysmodules
+             * share, and which sysmodules use it (launcher.txt) */
+            {
+                std::string free_s = "Not measured this boot", others;
+                if (FILE *f = std::fopen(LauncherTxt, "r")) {
+                    char b[2048] = {};
+                    const size_t n = std::fread(b, 1, sizeof(b) - 1, f);
+                    std::fclose(f);
+                    b[n] = 0;
+                    if (const char *m = std::strstr(b, "system memory ")) {
+                        const long kb = std::strtol(m + 14, nullptr, 10);
+                        char t[64];
+                        std::snprintf(t, sizeof(t), "%.1f MB free before it started", kb / 1024.0);
+                        free_s = t;
+                    }
+                    if (const char *o = std::strstr(b, "others=")) {
+                        others = o + 7;
+                        if (const size_t nl = others.find('\n'); nl != std::string::npos) { others.resize(nl); }
+                        for (size_t i = 0; (i = others.find("; ", i)) != std::string::npos; ) { others.replace(i, 2, "\n"); }
+                    }
+                }
+                rows.push_back({ Kind::Info, "System memory", [free_s] { return free_s; }, nullptr, nullptr,
+                    "All sysmodules share a few MB of the console's system memory with the system itself. When too little is left, "
+                    "launching a game can end on a black screen, and Switch Frame Tap does not start at all (the console still boots). "
+                    "Turning off a sysmodule you do not use frees some." +
+                    (others.empty() ? std::string() : std::string(" Sysmodules running at boot, biggest first:\n") + others) });
+            }
             rows.push_back({ Kind::Info, "Install type", [this] { return std::string(test_install ? "Test (applet-mitm.armed)" : "Release"); },
                 [this] { return test_install ? ColWarn : ColText; }, nullptr,
                 "A test install is driven by sdmc:/applet-mitm.armed and ignores config.ini. Delete that file for normal use." });

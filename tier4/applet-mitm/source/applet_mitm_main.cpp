@@ -410,6 +410,7 @@ namespace ams {
                     /* v0.7.13: the stacks' high-water marks, 2 and 10 minutes in, then hourly */
                     if (t == 0 && (i == 40 || i == 200 || (i > 200 && i % 1200 == 0))) { mitm::applet::LogStackUse(); }
                     LogAppletLimits();
+                    mitm::applet::UiProbeStep();   /* v0.7.14 research: off without probe-ui.txt */
                     ScreenFollowStream();
                 }
                 char b[96];
@@ -976,7 +977,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.13: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.14-probe1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

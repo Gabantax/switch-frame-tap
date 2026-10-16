@@ -132,4 +132,6 @@ namespace ams::mitm::applet {
     void NoteThread(const os::ThreadType *t);
     void LogStackUse();
 
+    void UiProbeStep();   /* applet_mitm_uiprobe.cpp */
+
 }

@@ -1,0 +1,95 @@
+app-id: io.github.TomasUribe.SwitchFrameTap
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+command: switch-frame-tap-viewer
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --filesystem=xdg-run/pipewire-0
+  - --device=dri
+  - --device=usb
+  - --filesystem=xdg-videos
+  - --share=network
+modules:
+  - name: nv-codec-headers
+    buildsystem: simple
+    build-commands:
+      - make PREFIX=/app install
+    cleanup:
+      - '*'
+    sources:
+      - type: archive
+        url: https://github.com/FFmpeg/nv-codec-headers/archive/refs/tags/n13.0.19.0.tar.gz
+        sha256: 86d15d1a7c0ac73a0eafdfc57bebfeba7da8264595bf531cf4d8db1c22940116
+  - name: ffmpeg
+    buildsystem: autotools
+    config-opts:
+      - --enable-static
+      - --disable-shared
+      - --enable-pic
+      - --disable-everything
+      - --disable-autodetect
+      - --disable-programs
+      - --disable-doc
+      - --disable-network
+      - --disable-avdevice
+      - --disable-avfilter
+      - --disable-swscale
+      - --disable-swresample
+      - --enable-decoder=h264
+      - --enable-parser=h264
+      - --enable-encoder=aac
+      - --enable-muxer=mp4
+      - --enable-protocol=file
+      - --enable-vaapi
+      - --enable-ffnvcodec
+      - --enable-cuda
+      - --enable-nvdec
+      - --enable-hwaccel=h264_vaapi,h264_nvdec
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-8.1.tar.xz
+        sha256: b072aed6871998cce9b36e7774033105ca29e33632be5b6347f3206898e0756a
+  - name: sdl2
+    buildsystem: autotools
+    config-opts:
+      - --disable-static
+      - --disable-esd
+      - --disable-arts
+      - --disable-nas
+      - --disable-sndio
+      - --disable-jack
+      - --disable-video-vulkan
+    cleanup:
+      - /bin
+      - /include
+      - /lib/pkgconfig
+      - /lib/cmake
+      - /share/aclocal
+      - /lib/*.la
+    sources:
+      - type: archive
+        url: https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz
+        sha256: 5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165
+  - name: switch-frame-tap
+    buildsystem: simple
+    build-commands:
+      - gcc -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 -I/app/include $(pkg-config --cflags sdl2 libusb-1.0) -o switch-frame-tap-viewer tools/raw-recv/raw-view.c /app/lib/libavformat.a /app/lib/libavcodec.a /app/lib/libavutil.a -lva -lva-drm $(pkg-config --libs sdl2 libusb-1.0) -ludev -lpthread -lm -ldl
+      - install -D switch-frame-tap-viewer /app/bin/switch-frame-tap-viewer
+      - install -D tools/raw-recv/switch-frame-tap.svg /app/share/icons/hicolor/scalable/apps/io.github.TomasUribe.SwitchFrameTap.svg
+      - install -D io.github.TomasUribe.SwitchFrameTap.desktop /app/share/applications/io.github.TomasUribe.SwitchFrameTap.desktop
+      - install -D io.github.TomasUribe.SwitchFrameTap.metainfo.xml /app/share/metainfo/io.github.TomasUribe.SwitchFrameTap.metainfo.xml
+    sources:
+      - type: archive
+        url: https://github.com/TomasUribe/switch-frame-tap/archive/refs/tags/v0.7.13.tar.gz
+        sha256: cda1a1d11bbb030fa8993c559bca2a3642ac7575806de1fa47de9126acf95a4e
+      - type: file
+        path: io.github.TomasUribe.SwitchFrameTap.desktop
+      - type: file
+        path: io.github.TomasUribe.SwitchFrameTap.metainfo.xml

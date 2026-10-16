@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.TomasUribe.SwitchFrameTap</id>
+  
+  <metadata_license>FSFAP</metadata_license>
+  
+  <project_license>GPL-2.0-only</project_license>
+  
+  <name>Switch Frame Tap</name>
+  <summary>Watch and record your Switch, streamed over USB or the network</summary>
+
+  <description>
+    <p>
+      The PC viewer for Switch Frame Tap: watch, play and record the game running on your Nintendo Switch, streamed with sound over a USB-C cable or the network at the game's own resolution and 60 fps.
+    </p>
+    <p>
+      It needs a Switch running Atmosphère with the Switch Frame Tap sysmodule installed. The viewer decodes on the GPU (VAAPI or NVDEC), records MP4 and takes native-resolution screenshots, with optional FSR 1 and NIS upscaling.
+    </p>
+    <p>
+      USB needs the udev rule from the project page installed once on the host.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.TomasUribe.SwitchFrameTap.desktop</launchable>
+
+  <url type="homepage">https://github.com/TomasUribe/switch-frame-tap</url>
+  <url type="bugtracker">https://github.com/TomasUribe/switch-frame-tap/issues</url>
+  <url type="donation">https://buymeacoffee.com/papux200</url>
+
+  <developer id="io.github.TomasUribe">
+    <name>Tomas Uribe</name>
+  </developer>
+
+  <provides>
+    <binary>switch-frame-tap-viewer</binary>
+  </provides>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>A Switch game streamed to a PC over USB</caption>
+      <image>https://raw.githubusercontent.com/TomasUribe/switch-frame-tap/master/docs/hero-switch-to-pc.jpg</image>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1"/>
+  
+  <releases>
+    <release version="0.7.13" date="2026-10-15">
+      <description>
+        <ul>
+          <li>Fixed black screen after launching many apps in a row.</li>
+          <li>Fixed boot crash on consoles with several sysmodules.</li>
+          <li>Super Mario Odyssey and similar games fill the stream in handheld instead of sitting in the top-left corner.</li>
+          <li>Uses much less system memory.</li>
+          <li>GPU decoding is on by default on Windows (D3D11VA) and Linux.</li>
+          <li>Smoother over Wi-Fi: the network stream sends a keyframe only every 4 s.</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

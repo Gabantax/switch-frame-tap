@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Switch Frame Tap
+Comment=Watch and record your Switch, streamed over USB or the network
+Exec=switch-frame-tap-viewer --app
+PrefersNonDefaultGPU=true
+Icon=io.github.TomasUribe.SwitchFrameTap
+Terminal=false
+Categories=Game;

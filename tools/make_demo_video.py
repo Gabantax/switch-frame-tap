@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Switch Frame Tap demo video: 1920x1080, 60 fps, H.264 + AAC.
 
-Segments (seconds of output):
+Segments:
   title card, the phone clip (Switch on the laptop -> the TV), a native
   recording framed in the middle, the phone's stats-overlay shot, end card.
 """
@@ -10,6 +10,7 @@ import av
 import numpy as np
 from fractions import Fraction
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+import hlg   # HLG (HDR) phone video -> SDR
 
 W, H, FPS = 1920, 1080, 60
 SR = 48000
@@ -19,9 +20,9 @@ FONT_R = "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf"
 BG = (14, 16, 22)
 ACCENT = (64, 196, 255)
 
-PHONE_CONNECT = "b.mp4"     # Switch on the laptop, then the TV
-PHONE_STATS = "a.mp4"       # overlay, Horizon OC, the stats at 60 fps 1080p
-REC = "/home/tomas/Videos/Switch Frame Tap/switch_2026-10-14_23-18-31.mp4"   # native 1080p recording
+PHONE_CONNECT = "/home/tomas/Desktop/VID20261015220845.mp4"   # 4K: Switch on the laptop, then the TV
+PHONE_STATS = "/home/tomas/Desktop/VID20261015221127.mp4"     # 4K: overlay, the stats at 60 fps 1080p
+REC = "/home/tomas/Videos/Switch Frame Tap/switch_2026-10-15_22-31-07.mp4"   # 1080p60 recording: MK8 menu + race
 
 
 def font(path, size):
@@ -69,12 +70,13 @@ def frames_of(path, t0, t1):
     c = av.open(path)
     v = c.streams.video[0]
     v.thread_type = "AUTO"
+    hdr = v.codec_context.color_trc == 18      # ARIB STD-B67 (HLG): the phone's 4K clips
     for f in c.decode(video=0):
         if f.time is None or f.time < t0:
             continue
         if f.time >= t1:
             break
-        yield f.time - t0, f.to_image()
+        yield f.time - t0, (hlg.to_sdr(f, 0.33) if hdr else f.to_image())
     c.close()
 
 
@@ -105,8 +107,22 @@ def fill_portrait(img):
 
 
 def phone(img):
-    """the phone clips: filmed in landscape, stored sideways (WhatsApp)"""
-    return fill_portrait(img.rotate(90, expand=True))
+    """the phone clips (4K originals, upright)"""
+    return fill_portrait(img)
+
+
+def badge(img, text="1080p 60fps"):
+    """a pill at the top left over the screen recording"""
+    f = font(FONT_B, 44)
+    over = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(over)
+    tw = d.textlength(text, font=f)
+    d.rounded_rectangle((40, 40, 40 + tw + 56, 40 + 76), radius=38, fill=(10, 12, 18, 210))
+    d.ellipse((60, 66, 84, 90), fill=(255, 64, 64, 255))   # a "live" dot
+    img = Image.alpha_composite(img.convert("RGBA"), over)
+    d = ImageDraw.Draw(img)
+    d.text((96, 52), text, font=f, fill=ACCENT)
+    return img.convert("RGB")
 
 
 def framed_landscape(img):
@@ -166,21 +182,24 @@ def main(out_path):
 
     # 1. title
     t = card([("Switch Frame Tap", big)],
-             [("Play your Switch games on your PC.", small), ("No capture card. No dock.", small)])
+             [("Play your Switch games on your PC.", small), ("No capture card. No dock.", small),
+              ("Works on Switch Lite too.", small)])
     segments.append(("still", t, 2.8, None))
 
     # 2. the phone clip: plug in, then the TV (0-13.6 s of b.mp4)
     segments.append(("clip", PHONE_CONNECT, 0.0, 5.8, phone,
                      [("A USB-C cable", mid), ("from the Switch to your PC", small)], 0.8))
     segments.append(("clip", PHONE_CONNECT, 5.8, 13.6, phone,
-                     [("...and play on the big screen", mid)], 0.8))
+                     [("...and play on the big screen", mid), ("works on Switch Lite too", small)], 0.8))
 
-    # 3. a native recording, framed
-    segments.append(("clip", REC, 3.0, 11.0, fill_portrait,
-                     [("The game's own frames", mid), ("at 60 fps, recorded on the PC", small)], 1.0))
+    # 3. the screen recording (R in the viewer): the menu, then a race
+    rec_shape = lambda img: badge(fill_portrait(img))
+    segments.append(("clip", REC, 0.5, 3.5, rec_shape,
+                     [("Recorded on the PC with one key", mid), ("the game's own frames, no capture card", small)], 1.0))
+    segments.append(("clip", REC, 26.0, 40.0, rec_shape, None, 1.0))
 
     # 4. the stats overlay on the TV (a.mp4 ~28.5-34 s)
-    segments.append(("clip", PHONE_STATS, 28.5, 34.0, phone,
+    segments.append(("clip", PHONE_STATS, 27.0, 31.8, phone,
                      [("Native 1080p, 60 fps", mid), ("USB or Wi-Fi", small)], 0.6))
 
     # 5. end card
@@ -218,7 +237,8 @@ def main(out_path):
             _, path, t0, t1, shape, cap, gain = seg
             dur = t1 - t0
             for img in retime(frames_of(path, t0, t1), dur):
-                img = caption(shape(img), cap)
+                img = shape(img)
+                if cap: img = caption(img, cap)
                 f = av.VideoFrame.from_image(img).reformat(format="yuv420p")
                 f.pts = pts
                 pts += 1

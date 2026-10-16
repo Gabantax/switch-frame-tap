@@ -34,7 +34,7 @@ the viewer on your PC, start a game.
 ## What you need
 
 - A Switch running [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere/releases)
-  (firmware 21 to 23; tested on 22.5.0 with Atmosphère 1.11.2, users run 23.0.0 with 1.12)
+  (firmware 21 to 23; tested on 22.5.0 with Atmosphère 1.11.2, users run 23.0.0 and 23.0.1 with 1.12)
 - A PC with Windows 10/11, Linux or macOS 12+
 - A USB-C cable, or the Switch and the PC on the same network
 
@@ -61,6 +61,12 @@ The full guide, with every option, is in [Install](#install).
 - **1080p over USB** needs [ReverseNX-RT](https://github.com/masagrator/ReverseNX-RT)
   to make the game render its docked picture in handheld; docked over the
   network it is 1080p by itself.
+- **It starts about 30 seconds after the console boots**, once the HOME menu
+  is up, so it never takes memory the system needs while booting.
+- **Running many sysmodules?** They all share a few MB of system memory. If
+  the others leave too little, Switch Frame Tap simply does not start (the
+  console boots normally); the manager app's **System memory** row says how
+  much each sysmodule uses.
 - **It is experimental homebrew**, tested on a few consoles and games. Read
   [Limitations](#limitations) before installing it.
 
@@ -207,21 +213,23 @@ Nothing else: no other sysmodule, no sigpatches, no capture card.
 This drives hardware engines directly; a bug can freeze the console (see
 [If something goes wrong](#if-something-goes-wrong)).
 
-**1. The Switch.** Download `switch-frame-tap-0.7.12-switch.zip` from the
+**1. The Switch.** Download `switch-frame-tap-0.7.13-switch.zip` from the
 [release](https://github.com/TomasUribe/switch-frame-tap/releases) and unzip
 it onto the root of the SD card (card reader or Hekate USB mass storage). It
 contains:
 
 ```
-atmosphere/contents/0100000000000C20/        the sysmodule (starts at boot)
+atmosphere/contents/0100000000000C20/        the sysmodule
+atmosphere/contents/0100000000000C21/        its launcher and memory helper (starts at boot)
 switch/switch-frame-tap/switch-frame-tap.nro  the manager app (homebrew menu)
 switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 ```
 
-Reboot. Updating later is the same: unzip over it; your settings are kept.
+Reboot. The sysmodule starts about 30 seconds after boot, once the HOME menu
+is up. Updating later is the same: unzip over it; your settings are kept.
 
 **2a. The PC viewer on Windows.** Unzip
-`switch-frame-tap-0.7.12-windows-viewer.zip` anywhere. Once, with the Switch
+`switch-frame-tap-0.7.13-windows-viewer.zip` anywhere. Once, with the Switch
 connected and running: open [Zadig](https://zadig.akeo.ie/), **Options ->
 List All Devices**, pick **Switch Frame Tap** (USB ID 1209 5F1E - make sure
 it is that one), choose **WinUSB** and **Install Driver**. Then double-click
@@ -229,7 +237,7 @@ it is that one), choose **WinUSB** and **Install Driver**. Then double-click
 unknown publisher: **More info -> Run anyway**.
 
 **2b. The PC viewer on Linux** (any distribution - Ubuntu, Fedora, Arch,
-Bazzite, SteamOS - x86_64). Unpack `switch-frame-tap-0.7.12-linux.tar.gz` and
+Bazzite, SteamOS - x86_64). Unpack `switch-frame-tap-0.7.13-linux.tar.gz` and
 run `./install.sh`: it puts **Switch Frame Tap** in the applications menu and
 prints the one `sudo` command that installs the USB rule (lets the viewer open
 the Switch). It is a single program with FFmpeg, SDL 2 and libusb built in.
@@ -244,7 +252,7 @@ bash tools/raw-recv/install-launcher.sh
 ```
 
 **2c. The PC viewer on macOS** (v0.7.11; Apple Silicon or Intel). Unzip
-`switch-frame-tap-0.7.12-macos-arm64.zip` (Apple Silicon) or `-x86_64.zip`
+`switch-frame-tap-0.7.13-macos-arm64.zip` (Apple Silicon) or `-x86_64.zip`
 (Intel) and drag **Switch Frame Tap.app** to Applications. It is not signed by
 Apple: the first time, right-click it and choose **Open**. No USB driver is
 needed. Thanks to proconsule54 and DiM3NT0R for the first macOS builds.
@@ -285,7 +293,7 @@ video decoder - about 5 ms less latency in busy scenes and no keyframe
 stutter - and falls back to the CPU by itself. On by default on Linux (VAAPI
 for AMD and Intel, the Steam Deck included, or NVDEC for NVIDIA - since v0.7.13
 also in the ready-made Linux download, which loads the system's libva only if
-it is there); on Windows (D3D11VA) and macOS (VideoToolbox)
+it is there) and, since v0.7.13, on Windows (D3D11VA). On macOS (VideoToolbox)
 it is still being tested, so it is off by default there - turn it on in
 Settings and tell us how it goes. `--software` (or `hwdec=0` in viewer.ini)
 decodes on the CPU.
@@ -468,6 +476,11 @@ steady and the picture gets softer in fast scenes instead.
 - The network decides the picture: a close hotspot or a LAN adapter in the
   dock is best; a far-away or busy home Wi-Fi drops the quality more often.
   **Max resolution 720p** halves what the network has to carry.
+- Fewer keyframes (v0.7.13): over the network nothing gets lost, so the
+  Switch sends a keyframe - a big full picture - only every 4 seconds, plus
+  one right away whenever the viewer needs it (connecting, recording, a
+  decoder change). On a busy Wi-Fi those big frames used to stall the stream
+  for a moment every second.
 - Windows asks once whether to allow the viewer through the firewall on
   private networks - allow it.
 
@@ -501,15 +514,18 @@ stored uncompressed: exactly the pixels the game drew, ~6 MB at 1080p.
 ### Logs
 
 `sdmc:/config/switch-frame-tap/log.txt` (rewritten at every boot, capped at
-4 MB) and `last.txt`, a one-line breadcrumb that survives a forced power-off.
-Please attach both to a bug report.
+4 MB; the previous boot's is kept as `log.prev.txt`), `last.txt`, a one-line
+breadcrumb that survives a forced power-off, and `launcher.txt`, why the
+sysmodule did or did not start this boot and which sysmodules use the shared
+system memory. Please attach them to a bug report, with any new files in
+`atmosphere/crash_reports/`.
 
 ## Building from source
 
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh 0.7.12      # -> dist/switch-frame-tap-0.7.12-{switch.zip,linux.tar.gz,windows-viewer.zip} (macOS: GitHub Actions)
+bash tools/make_release.sh 0.7.13      # -> dist/switch-frame-tap-0.7.13-{switch.zip,linux.tar.gz,windows-viewer.zip} (macOS: GitHub Actions)
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 
@@ -581,13 +597,15 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
 ## If something goes wrong
 
 Turn off **Start with the console** in the manager and reboot; or delete
-`atmosphere/contents/0100000000000C20/` from the SD card on a PC; or boot
+`atmosphere/contents/0100000000000C20/` and `0100000000000C21/` from the SD
+card on a PC; or boot
 holding **Volume Up**, which makes Atmosphère skip `contents` sysmodules.
 Nothing here touches NAND or the bootloader. Keep a NAND backup anyway.
 
 Read the SD card through a card reader or Hekate's USB mass storage, **not
 MTP**: MTP returns I/O errors on a log whose tail was cut by a forced
-power-off. Copy the log off before the console boots Atmosphère again.
+power-off. The previous boot's log is kept as `log.prev.txt`, so the boot
+that went wrong survives one reboot.
 
 ## How this was built — with an AI, openly
 

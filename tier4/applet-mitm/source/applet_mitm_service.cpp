@@ -250,6 +250,16 @@ namespace ams::mitm::applet {
         R_RETURN(sm::mitm::ResultShouldForwardToSession());
     }
 
+    /* v0.7.13: the forward service, closed with its last reference. These
+     * were make_shared<::Service> - a C struct with no destructor - so every
+     * app left its display service and binder relay open in vi: ~3 sessions
+     * a launch, and around the 15th vi aborted on the next one (a black
+     * screen, BigBro030 on GBAtemp; vi crash reports, test12). am's wrappers
+     * had it right (MakeForward). */
+    std::shared_ptr<::Service> MakeForwardService(const ::Service &s) {
+        return std::shared_ptr<::Service>(new ::Service(s), [](::Service *p) { serviceClose(p); delete p; });
+    }
+
     /* ---- IApplicationDisplayService ----------------------------------- */
 
     Result ViDisplaySvcMitm::GetRelayService(sf::Out<sf::SharedPointer<IBinderMitm>> out) {
@@ -267,7 +277,7 @@ namespace ams::mitm::applet {
             R_RETURN(rc);
         }
 
-        auto shared_srv = std::make_shared<::Service>(binder_svc);
+        auto shared_srv = MakeForwardService(binder_svc);
         const sf::cmif::DomainObjectId target_object_id{ serviceGetObjectId(std::addressof(binder_svc)) };
 
         ::ams::sf::impl::g_tier4_pending_mitm_forward = shared_srv;
@@ -331,8 +341,7 @@ namespace ams::mitm::applet {
         } tls_save;
         SmUse sm_use;   /* v0.7.10: sm only while needed (closed before tls_save restores) */
         if (g_sess_port == os::InvalidNativeHandle) {
-            /* v0.7.13 test: 256, was 64 (#15: does the hang at ~15 apps move?) */
-            if (const Result rc = sm::RegisterService(std::addressof(g_sess_port), SessServiceName, 256, false); R_FAILED(rc)) {
+            if (const Result rc = sm::RegisterService(std::addressof(g_sess_port), SessServiceName, 64, false); R_FAILED(rc)) {
                 g_sess_port = os::InvalidNativeHandle;
                 if (g_sess_fail++ < 4) { LogLine("sessions: could not register sftap:s rc=0x%x - creating them ourselves", rc.GetValue()); }
                 R_RETURN(rc);
@@ -490,7 +499,7 @@ namespace ams::mitm::applet {
     }
 
     void WrapDisplayService(::Service disp_svc, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out) {
-        auto shared_srv = std::make_shared<::Service>(disp_svc);
+        auto shared_srv = MakeForwardService(disp_svc);
         const sf::cmif::DomainObjectId target_object_id{ serviceGetObjectId(std::addressof(disp_svc)) };
 
         /* tier4 libstratosphere patch: give the wrapper's session a forward

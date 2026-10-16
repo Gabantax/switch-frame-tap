@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.github.TomasUribe.SwitchFrameTap</id>
+  <id>io.github.TomasUribe.SwitchFrameTap</id>
   
   <metadata_license>FSFAP</metadata_license>
   
@@ -11,20 +11,23 @@
 
   <description>
     <p>
-      Switch Frame Tap is a viewer that allows you to watch and record your Nintendo Switch, streamed over USB or the network.
+      The PC viewer for Switch Frame Tap: watch, play and record the game running on your Nintendo Switch, streamed with sound over a USB-C cable or the network at the game's own resolution and 60 fps.
     </p>
     <p>
-      The application features built-in hardware-accelerated decoding using FFmpeg (H.264, AAC, MP4), supports GPU decoding on Linux, and includes upscaling shaders like AMD FidelityFX FSR 1 and NVIDIA Image Scaling.
+      It needs a Switch running Atmosphère with the Switch Frame Tap sysmodule installed. The viewer decodes on the GPU (VAAPI or NVDEC), records MP4 and takes native-resolution screenshots, with optional FSR 1 and NIS upscaling.
+    </p>
+    <p>
+      USB needs the udev rule from the project page installed once on the host.
     </p>
   </description>
 
-  <launchable type="desktop-id">com.github.TomasUribe.SwitchFrameTap.desktop</launchable>
+  <launchable type="desktop-id">io.github.TomasUribe.SwitchFrameTap.desktop</launchable>
 
   <url type="homepage">https://github.com/TomasUribe/switch-frame-tap</url>
   <url type="bugtracker">https://github.com/TomasUribe/switch-frame-tap/issues</url>
   <url type="donation">https://buymeacoffee.com/papux200</url>
 
-  <developer id="com.github.TomasUribe">
+  <developer id="io.github.TomasUribe">
     <name>Tomas Uribe</name>
   </developer>
 
@@ -34,7 +37,7 @@
 
   <screenshots>
     <screenshot type="default">
-      <caption>Switch Frame Tap in Aktion</caption>
+      <caption>A Switch game streamed to a PC over USB</caption>
       <image>https://raw.githubusercontent.com/TomasUribe/switch-frame-tap/master/docs/hero-switch-to-pc.jpg</image>
     </screenshot>
   </screenshots>

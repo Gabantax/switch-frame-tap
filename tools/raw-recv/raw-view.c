@@ -122,6 +122,15 @@ static int g_win_w = 0, g_win_h = 0;  /* --window WxH: keep the window this size
  * bigger than the screen (a 1080p stream on a 1366x768 laptop) */
 static void size_video_window(SDL_Window *win, int width, int height)
 {
+#ifdef _WIN32
+    /* v0.7.13: the viewer is DPI aware on Windows (main), so sizes are real
+     * pixels - keep the window as big on screen as before, now sharp */
+    float ddpi = 0;
+    if (SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(win), &ddpi, NULL, NULL) == 0 && ddpi > 100.0f) {
+        width = (int)(width * ddpi / 96.0f);
+        height = (int)(height * ddpi / 96.0f);
+    }
+#endif
     SDL_Rect usable;
     if (SDL_GetDisplayUsableBounds(SDL_GetWindowDisplayIndex(win), &usable) == 0) {
         double fit = 1.0;
@@ -938,6 +947,19 @@ static void act_fullscreen(SDL_Window *win)
 {
     const int fs = (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
     SDL_SetWindowFullscreen(win, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+    /* v0.7.13: a screen whose mode is not 16:9 shows the picture with bars
+     * at the sides - often a TV Windows put on 4096x2160 instead of 3840x2160,
+     * which the TV then squeezes into its 16:9 panel (a narrower picture) */
+    SDL_DisplayMode dm;
+    if (!fs && SDL_GetDesktopDisplayMode(SDL_GetWindowDisplayIndex(win), &dm) == 0 && dm.h > 0) {
+        const double a = (double)dm.w / dm.h;
+        fprintf(stderr, "\nfullscreen: the screen is %dx%d at %d Hz\n", dm.w, dm.h, dm.refresh_rate);
+        if (a > 16.0 / 9.0 * 1.03 || a < 16.0 / 9.0 * 0.97) {
+            char t[112];
+            snprintf(t, sizeof(t), "This screen runs at %dx%d (not 16:9) - pick a 16:9 mode like 3840x2160 for no side bars", dm.w, dm.h);
+            hud_toast(t);
+        }
+    }
 }
 
 static void act_record(SDL_Window *win)
@@ -1564,6 +1586,11 @@ int main(int argc, char **argv)
     const char *file = NULL, *record = NULL, *h264_out = NULL, *net_host = NULL;
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);          /* v0.7.13: the viewer sends (key_request); a closed socket must not end it */
+#else
+    /* v0.7.13: per-monitor DPI aware - without it Windows drew the viewer at
+     * 96 dpi and stretched it on a scaled display (a 4K TV at 150-300 %):
+     * a soft picture and soft text */
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
 #endif
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--swap")) swap_rb = 1;

@@ -57,12 +57,12 @@ final class Transports {
                     }
                 }
             }
-            if (foundEndpoint == null) throw new IOException("Selecciona USB viewer en la Switch; el modo webcam no es compatible");
+            if (foundEndpoint == null) throw new IOException("Select USB viewer on the Switch; webcam mode is not supported");
             iface = foundInterface; endpoint = foundEndpoint;
             connection = manager.openDevice(device);
-            if (connection == null) throw new IOException("No se pudo abrir el USB; revisa el permiso");
+            if (connection == null) throw new IOException("Could not open the USB device; check the permission");
             if (!connection.claimInterface(iface, true)) {
-                connection.close(); throw new IOException("La interfaz USB está ocupada");
+                connection.close(); throw new IOException("The USB interface is busy");
             }
         }
         @Override public int read(byte[] data, int offset, int length) throws IOException {

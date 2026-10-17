@@ -51,7 +51,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private CheckBox mute, stable, showStats;
     private boolean usbMode, resumed, surfaceReady, requested, manualMenu, panelDismissed;
     private StreamEngine engine;
-    private String message = "Selecciona la conexión y pulsa Conectar.";
+    private String message = "Choose a connection and select Connect.";
     private long sampledNs, sampledFrames, sampledBytes, sampledReceived, sampledDecoded, sampledAudio;
     private AudioManager audioManager;
     private boolean focusGranted;
@@ -66,7 +66,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
                     || (device != null && ((UsbManager)getSystemService(USB_SERVICE)).hasPermission(device));
             if (!granted) {
                 requested = false; stopEngine();
-                setMessage("Acceso USB rechazado. Pulsa Conectar para solicitarlo otra vez.");
+                setMessage("USB access denied. Select Connect to request permission again.");
             }
         }
     };
@@ -106,61 +106,61 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         LinearLayout heading = row(); heading.setGravity(Gravity.CENTER_VERTICAL); body.addView(heading);
         TextView title = text("Switch Frame Tap TV", 28, WHITE); title.setTypeface(null, Typeface.BOLD);
         heading.addView(title, new LinearLayout.LayoutParams(0,-2,1));
-        closePanelButton = button("Cerrar panel", v -> dismissPanel());
-        closePanelButton.setContentDescription("Cerrar el panel y mostrar el vídeo sin desconectar");
+        closePanelButton = button("Close panel", v -> dismissPanel());
+        closePanelButton.setContentDescription("Close the panel and show the video without disconnecting");
         heading.addView(closePanelButton, new LinearLayout.LayoutParams(dp(145),dp(48)));
-        addText(body, "Vídeo y audio de tu Switch · reproducción directa", 14, GREEN);
+        addText(body, "Video and audio from your Switch · direct playback", 14, GREEN);
         addText(body, Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE, 12, Color.LTGRAY);
         status = text(message, 16, WHITE); status.setPadding(0,dp(14),0,dp(10)); body.addView(status);
         LinearLayout modes = row(); body.addView(modes);
-        networkButton = button("Red", v -> chooseMode(false)); usbButton = button("USB", v -> chooseMode(true));
+        networkButton = button("Network", v -> chooseMode(false)); usbButton = button("USB", v -> chooseMode(true));
         addButton(modes, networkButton); addButton(modes, usbButton);
         ip = new EditText(this); ip.setTextColor(WHITE); ip.setHintTextColor(Color.LTGRAY);
-        ip.setSingleLine(true); ip.setTextSize(17); ip.setHint("IP de la Switch · vacío = búsqueda automática");
+        ip.setSingleLine(true); ip.setTextSize(17); ip.setHint("Switch IP address · leave blank for automatic discovery");
         ip.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_NORMAL);
         ip.setText(prefs.getString("ip", "")); ip.setSelectAllOnFocus(true); body.addView(ip);
         hostInfo = text("", 13, Color.LTGRAY); body.addView(hostInfo);
         LinearLayout actions = row(); body.addView(actions);
-        connectButton = button("Conectar", v -> connect());
-        disconnectButton = button("Desconectar", v -> { requested = false; stopEngine(); manualMenu = false; panelDismissed = false; setMessage("Desconectado."); showPanel(true); });
+        connectButton = button("Connect", v -> connect());
+        disconnectButton = button("Disconnect", v -> { requested = false; stopEngine(); manualMenu = false; panelDismissed = false; setMessage("Disconnected."); showPanel(true); });
         addButton(actions, connectButton); addButton(actions, disconnectButton);
-        mute = check("Silenciar audio", prefs.getBoolean("mute", false)); body.addView(mute);
+        mute = check("Mute audio", prefs.getBoolean("mute", false)); body.addView(mute);
         mute.setOnCheckedChangeListener((v, checked) -> {
             prefs.edit().putBoolean("mute", checked).apply();
             if (engine != null) engine.mute(checked || !focusGranted);
         });
-        stable = check("Audio estable (más margen ante cortes)", prefs.getBoolean("stable_audio", false)); body.addView(stable);
+        stable = check("Stable audio (larger buffer to reduce dropouts)", prefs.getBoolean("stable_audio", false)); body.addView(stable);
         stable.setOnCheckedChangeListener((v, checked) -> {
             prefs.edit().putBoolean("stable_audio", checked).apply();
             if (requested) { stopEngine(); startEngine(); }
         });
-        showStats = check("Mostrar estadísticas", prefs.getBoolean("stats", false)); body.addView(showStats);
+        showStats = check("Show statistics", prefs.getBoolean("stats", false)); body.addView(showStats);
         showStats.setOnCheckedChangeListener((v, checked) -> {
             prefs.edit().putBoolean("stats", checked).apply(); hud.setVisibility(checked && engine != null ? View.VISIBLE : View.GONE);
         });
-        addText(body, "La calidad y la resolución se eligen en la consola. La app conserva el vídeo original.", 13, Color.LTGRAY);
-        addText(body, "OK / Menú: controles · Atrás: volver al vídeo\nEl mando de juego permanece conectado a la Switch.", 13, GREEN);
-        addText(body, "Preview 0.1.1 · GPL-2.0 · Tomas Uribe / switch-frame-tap", 11, Color.LTGRAY);
+        addText(body, "Choose quality and resolution on the console. The app preserves the original video.", 13, Color.LTGRAY);
+        addText(body, "OK / Menu: controls · Back: return to video\nKeep your game controller connected to the Switch.", 13, GREEN);
+        addText(body, "Preview 0.1.2 · GPL-2.0 · Tomas Uribe / switch-frame-tap", 11, Color.LTGRAY);
         networkButton.requestFocus();
     }
     private void chooseMode(boolean usb) {
         requested = false; stopEngine(); usbMode = usb;
         panelDismissed = false;
         prefs.edit().putBoolean("usb", usb).apply();
-        updateMode(); setMessage("Selecciona este mismo modo de conexión en la Switch y pulsa Conectar.");
+        updateMode(); setMessage("Choose the same connection mode on the Switch, then select Connect.");
     }
     private void updateMode() {
-        networkButton.setText(usbMode ? "Red" : "Red ✓"); usbButton.setText(usbMode ? "USB ✓" : "USB");
+        networkButton.setText(usbMode ? "Network" : "Network ✓"); usbButton.setText(usbMode ? "USB ✓" : "USB");
         ip.setVisibility(usbMode ? View.GONE : View.VISIBLE);
         if (usbMode) hostInfo.setText(getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST)
-                ? "Switch → cable USB de datos → TV. Selecciona USB viewer, no webcam."
-                : "Este dispositivo no anuncia USB host. Conecta por red.");
-        else hostInfo.setText("Misma red local · TCP 9950 · cierra el viewer del PC. Solo admite un viewer.");
+                ? "Switch → USB data cable → TV. Select USB viewer mode on the console."
+                : "This device does not report USB host support. Use Network instead.");
+        else hostInfo.setText("Same local network · TCP 9950 · close the PC viewer. Only one viewer can connect.");
     }
     private void connect() {
         String address = ip.getText().toString().trim();
         if (!usbMode && !address.isEmpty() && !SftProtocol.ipv4(address)) {
-            setMessage("Introduce una IPv4 válida, por ejemplo 192.168.1.50, o deja el campo vacío."); ip.requestFocus(); return;
+            setMessage("Enter a valid IPv4 address, such as 192.168.1.50, or leave the field blank."); ip.requestFocus(); return;
         }
         ((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE))
                 .hideSoftInputFromWindow(ip.getWindowToken(), 0);
@@ -197,7 +197,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
                     PendingIntent result = PendingIntent.getBroadcast(MainActivity.this, 0,
                             new Intent(usbAction()).setPackage(getPackageName()), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
                     try { ((UsbManager)getSystemService(USB_SERVICE)).requestPermission(device, result); }
-                    catch (RuntimeException e) { setMessage("No se pudo solicitar permiso USB: " + e.getMessage()); }
+                    catch (RuntimeException e) { setMessage("Could not request USB permission: " + e.getMessage()); }
                 });
             }
         };
@@ -205,7 +205,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
                 prefs.getString("last_ip", ""), stable.isChecked(), mute.isChecked() || !focusGranted, listener);
         identity[0] = engine; sampledNs = System.nanoTime();
         sampledBytes = sampledFrames = sampledReceived = sampledDecoded = sampledAudio = 0;
-        showPanel(true); setMessage("Iniciando conexión…"); engine.start();
+        showPanel(true); setMessage("Starting connection…"); engine.start();
     }
     private void stopEngine() {
         StreamEngine old = engine; engine = null;
@@ -225,7 +225,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
                 if (active && !manualMenu) showPanel(false);
                 else if (!active && !panelDismissed) {
                     if (panel.getVisibility() != View.VISIBLE) {
-                        setMessage(s.decoderErrors > 0 ? message : "Sin imagen reciente. Abre o vuelve al juego en la Switch.");
+                        setMessage(s.decoderErrors > 0 ? message : "No recent video. Open or return to a game on the Switch.");
                         showPanel(true);
                     }
                 }
@@ -238,11 +238,11 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
                     double decoded = (s.decoded - sampledDecoded) / seconds;
                     double audioKb = (s.audioBytes - sampledAudio) / seconds / 1000;
                     hud.setText(String.format(Locale.ROOT,
-                            "%s · %d×%d · %.1f Mbps\nVídeo RX %.1f · decodificado %.1f · mostrado %.1f FPS\nCola + decoder %.1f ms · edad consola %.1f ms\nAudio RX %.0f kB/s · reproducido %.0f ms · cola %.0f ms\nAudio %s · buffer TV %.0f ms · %s\nErrores %d · descartados %d/%d · PTS adaptados %d\n%s",
+                            "%s · %d×%d · %.1f Mbps\nVideo RX %.1f · decoded %.1f · shown %.1f FPS\nQueue + decode %.1f ms · console age %.1f ms\nAudio RX %.0f kB/s · played %.0f ms · queued %.0f ms\nAudio %s · TV buffer %.0f ms · %s\nErrors %d · dropped %d/%d · adjusted PTS %d\n%s",
                             s.transport, s.width, s.height, mbps, rx, decoded, fps, s.decoderMs, s.consoleMs,
                             audioKb, s.audioPlayedFrames / 48.0, s.audioQueuedMs,
-                            s.audioMuted ? "silenciado" : "activo", s.audioBufferMs,
-                            focusGranted ? "foco concedido" : "sin foco", s.decoderErrors, s.skipped,
+                            s.audioMuted ? "muted" : "active", s.audioBufferMs,
+                            focusGranted ? "focus granted" : "no audio focus", s.decoderErrors, s.skipped,
                             s.videoDropped, s.unmatchedPts, s.decoder + " · " + s.audio));
                     sampledNs = now; sampledFrames = s.rendered; sampledBytes = s.bytes;
                     sampledReceived = s.received; sampledDecoded = s.decoded; sampledAudio = s.audioBytes;

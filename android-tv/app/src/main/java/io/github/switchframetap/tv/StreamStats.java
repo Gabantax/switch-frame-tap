@@ -9,5 +9,5 @@ final class StreamStats {
     volatile double audioBufferMs;
     volatile boolean audioMuted;
     volatile int width, height;
-    volatile String decoder = "—", audio = "Esperando sonido", transport = "";
+    volatile String decoder = "—", audio = "Waiting for audio", transport = "";
 }

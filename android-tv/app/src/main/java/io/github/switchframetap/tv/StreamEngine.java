@@ -72,7 +72,7 @@ final class StreamEngine {
                     a = new AudioPump(stats, stableAudio); audio = a; a.mute(muted); a.start();
                     video = new VideoDecoder(surface, queue, stats, this::status); decoder = video; video.start();
                     if (stopped) break;
-                    status("Conectado. Abre un juego en la Switch…");
+                    status("Connected. Open a game on the Switch…");
                     while (!stopped) {
                         SftProtocol.Packet packet = SftProtocol.readPacket(connected, () -> stopped);
                         stats.bytes += packet.data.length + 32;
@@ -91,7 +91,7 @@ final class StreamEngine {
                 } catch (IOException | RuntimeException e) {
                     if (!stopped) {
                         Log.w("SFT-TV", "Transport", e);
-                        status(e.getMessage() + ". Reconectando…");
+                        status(e.getMessage() + ". Reconnecting…");
                     }
                 } finally {
                     closeSource(); source = null;
@@ -109,7 +109,7 @@ final class StreamEngine {
     }
     private SftProtocol.Source usbConnect() throws IOException {
         if (!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST)) {
-            status("Este dispositivo no ofrece USB host. Usa la conexión por red.");
+            status("This device does not support USB host mode. Use Network instead.");
             while (!stopped) pause(500);
             return null;
         }
@@ -119,9 +119,9 @@ final class StreamEngine {
             UsbDevice device = Transports.find(manager);
             if (device == null) {
                 requested.clear();
-                status("Esperando Switch por USB. Usa el modo USB viewer y un cable de datos.");
+                status("Waiting for the Switch over USB. Use USB viewer mode and a data cable.");
             } else if (!manager.hasPermission(device)) {
-                status("Autoriza el acceso USB. Si lo rechazaste, pulsa Conectar para intentarlo otra vez.");
+                status("Allow USB access. If permission was denied, select Connect to try again.");
                 if (requested.add(device.getDeviceName())) listener.usbPermission(device);
             } else {
                 source = new Transports.Usb(manager, device);
@@ -136,10 +136,10 @@ final class StreamEngine {
     private Transports.Tcp tcp(String host, int port) throws IOException {
         Transports.Tcp tcp = new Transports.Tcp(); source = tcp;
         try {
-            if (stopped) throw new IOException("Conexión detenida");
+            if (stopped) throw new IOException("Connection stopped");
             tcp.connect(host, port);
-            if (stopped) throw new IOException("Conexión detenida");
-            stats.transport = "Red · " + host;
+            if (stopped) throw new IOException("Connection stopped");
+            stats.transport = "Network · " + host;
             rememberedAddress = host;
             listener.connectedAddress(host);
             return tcp;
@@ -147,7 +147,7 @@ final class StreamEngine {
     }
     private SftProtocol.Source networkConnect() throws IOException {
         if (!address.isEmpty()) {
-            status("Conectando a " + address + ":9950…");
+            status("Connecting to " + address + ":9950…");
             return tcp(address, Transports.PORT);
         }
         String recent = rememberedAddress;
@@ -163,7 +163,7 @@ final class StreamEngine {
                     try { return tcp(recent, Transports.PORT); }
                     catch (IOException e) { nextTry = System.nanoTime() + 3_000_000_000L; }
                 }
-                status("Buscando la Switch por red. Si no aparece, introduce su IP.");
+                status("Searching for the Switch on the network. Enter its IP address if it is not found.");
                 byte[] bytes = new byte[256];
                 DatagramPacket packet = new DatagramPacket(bytes, bytes.length);
                 try {

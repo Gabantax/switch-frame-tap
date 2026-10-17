@@ -1,76 +1,80 @@
-# Validación de la preview
+# Preview validation
 
-Versión 0.1.1: pruebas de host y compilación completas; pendiente de comprobar
-el resultado en el Vestel Cosmos / Android 11 del usuario.
+Version 0.1.2 translates the interface and documentation into English. The playback
+fixes introduced in 0.1.1 have passed host regressions. Confirmation on the reported
+Vestel Cosmos / Android 11 device is still pending.
 
-## Comprobado en el entorno de desarrollo
+## Completed development checks
 
-- `:app:assembleDebug`: compilación e instalación potencial como APK firmada.
-- `:app:protocolTest`: 40 comprobaciones; incluye diez fotogramas de una captura
-  real de la Switch en `logs/m83-runI/stream-first10.sft`.
-- Cabeceras little-endian, lecturas fragmentadas con timeouts intermedios,
-  separación de vídeo/PCM, enteros sin signo y cancelación.
-- Rechazo de cabeceras inválidas, versiones antiguas, tamaños fuera de límites,
-  PCM desalineado y formatos no soportados antes de reservar el payload.
-- Extracción de SPS/PPS con prefijos Annex-B de tres y cuatro bytes.
-- Recuperación de referencias al iniciar, perder un paquete, cambiar de resolución,
-  reiniciar sesión o saturarse/envejecer la cola. Se espera un IDR antes de decodificar
-  fotogramas dependientes; se comprueba también el rollover de secuencia.
-- `:app:lintDebug`: sin errores de Android Lint. Las advertencias de target SDK,
-  orientación horizontal y traducción de textos son limitaciones de esta preview.
-- Servidor de prueba: lecturas TCP fragmentadas, H.264 real, tono PCM estéreo
-  y una segunda conexión. Se prueba en loopback sin anuncios a la LAN.
-- APK: metadatos de API mínima 23, launcher de Android TV, USB opcional y firma
-  verificada con las herramientas del SDK.
-- `:app:playbackTest`: ejecuta los workers reales con dobles de drivers, que
-  se compilan aparte y no se incluyen en la APK:
-  - Primer buffer de entrada retrasado 60 ms: se configura una sola vez y aparece salida.
-  - Salida retrasada 180 ms y PTS alterados: se presenta imagen en lugar de descartarla toda.
-  - Hardware que acepta datos sin devolver imagen: cambia al decoder de software en un IDR.
-  - Audio nativo que exige 160 ms para iniciar: reproduce y no entra en un ciclo de vaciados.
+- `:app:assembleDebug`: builds a signed debug APK.
+- `:app:protocolTest`: 40 checks from the full repository, including ten frames from
+  the real capture at `logs/m83-runI/stream-first10.sft`.
+- Little-endian headers, fragmented reads with intermediate timeouts, video/PCM
+  separation, unsigned fields, and cancellation.
+- Rejection of invalid headers, older protocol versions, oversized allocations,
+  unaligned PCM, and unsupported formats before allocating payload storage.
+- SPS/PPS extraction with three-byte and four-byte Annex-B start codes.
+- Reference recovery at startup, sequence gaps, resolution changes, session
+  restarts, and queue overflow/aging. Dependent frames are ignored until an IDR;
+  unsigned sequence rollover is also checked.
+- `:app:lintDebug`: no Android Lint errors. Warnings about target SDK, landscape
+  orientation, and hardcoded UI strings remain preview limitations.
+- Replay server: fragmented TCP reads, real H.264 packets, a stereo PCM tone,
+  and reconnection. The automated test uses loopback without LAN announcements.
+- APK: minimum API 23, Android TV launcher entry, optional USB feature, and signature
+  verification with Android SDK tools.
+- `:app:playbackTest`: production playback workers run against driver test doubles
+  compiled separately from the APK. The regression scenarios cover:
+  - First input buffer delayed by 60 ms: one decoder configuration, followed by output.
+  - Output delayed by 180 ms with rewritten PTS: frames are presented rather than all discarded.
+  - Hardware accepting input without output: recovery selects software decoding at an IDR.
+  - Native audio requiring 160 ms to start: playback advances without repeated flushing.
 
-Estas comprobaciones **no prueban la reproducción física ni la latencia**.
-No se han ejecutado el sysmodule ni los viewers de PC existentes.
+Host checks **do not establish physical playback correctness or end-to-end latency**.
+The development checks did not run the existing Switch sysmodule or PC viewers.
+The user independently confirmed that Windows receives video and audio over the
+network from the same console.
 
-## Primera prueba en tu TV
+## Physical TV test plan
 
-1. Instala la APK y comprueba que aparece en el launcher. Recorre los botones con
-   las flechas del mando y verifica que el foco es visible. Comprueba **Cerrar panel**
-   antes y después de recibir imagen; debe seguir cerrado hasta que lo abras con el mando.
-2. Cierra el viewer de Windows. Pon Switch Frame Tap en Network y conecta la TV
-   por IP manual primero. Confirma imagen, color, proporción y sonido.
-3. Activa estadísticas y anota modelo de TV, versión Android, resolución, FPS,
-   decoder, tiempos de cola/decodificación y resincronizaciones. Prueba un juego
-   de 60 fps y otro de 30 fps.
-4. Prueba 720p y 1080p, High y Medium en la consola. Comprueba que cambia de
-   resolución sin imagen corrupta. Compara red cableada y Wi-Fi si están disponibles.
-5. Vuelve al HOME de la Switch, cierra/reabre el juego, desconecta/reconecta la red
-   y sal/vuelve a la app de TV. Debe recuperar imagen sin tener que reinstalar.
-6. Cambia ambos lados a USB viewer. Conecta directamente la Switch en portátil,
-   autoriza USB y comprueba vídeo/audio. Quita y vuelve a poner el cable.
-7. Rechaza el permiso USB una vez: no debe entrar en un ciclo de diálogos; pulsa
-   Conectar para solicitarlo otra vez. Prueba Silenciar y Audio estable.
+1. Install the APK and confirm it appears in the launcher. Navigate with the remote's
+   arrow keys and check visible focus. Test **Close panel** before and after receiving
+   video. It should remain closed until reopened with the remote.
+2. Close the Windows viewer. Set Switch Frame Tap to Network and connect the TV using
+   a manual IP address first. Check image, color, aspect ratio, and sound.
+3. Enable **Show statistics** and record the TV model, Android version, resolution,
+   received/decoded/presented FPS, decoder, queue/decode times, and resynchronizations.
+   Try a 60 fps game and a 30 fps game.
+4. Try 720p and 1080p, and High and Medium quality on the console. Check recovery
+   after resolution changes. Compare Ethernet and Wi-Fi if available.
+5. Return to the Switch HOME menu, close/reopen the game, disconnect/reconnect the
+   network, and leave/return to the TV app. It should recover without reinstallation.
+6. Set both ends to USB viewer. Connect the handheld Switch directly, allow USB
+   access, and check video/audio. Unplug and reconnect the cable.
+7. Deny USB access once: the app should not repeatedly display permission dialogs.
+   Select **Connect** to request permission again. Test **Mute audio** and **Stable audio**.
 
-Para comparar la latencia, graba en cámara lenta una animación o contador visible
-simultáneamente en la pantalla de la Switch y en la TV. La diferencia entre ambas
-imágenes aproxima el retardo añadido; las estadísticas internas no lo sustituyen.
-No cambies la calidad o resolución entre las tomas que estés comparando.
+To compare latency, use a slow-motion camera to record a counter or animation
+visible simultaneously on the Switch and TV. The image difference approximates the
+added delay; internal statistics are not a substitute. Keep quality and resolution
+unchanged between recordings that are being compared.
 
-Si falla, indica el paso, mensaje mostrado y foto de las estadísticas. Si tienes
-ADB conectado a la TV, `adb logcat -s SFT-TV` recoge los errores de transporte,
-audio y vídeo del viewer. El servidor de replay permite aislar la reproducción
-Android del streamer de la consola.
+## Troubleshooting
 
-Para el caso «conecta pero no hay imagen/sonido», pulsa **Cerrar panel** y mira:
+Report the failing step, displayed message, and a photo of the full statistics.
+With ADB connected to the TV, `adb logcat -s SFT-TV` collects transport, audio, and
+video errors. The replay server can isolate Android playback from the console streamer.
 
-- **Vídeo RX > 0, decodificado = 0:** el decoder no devuelve imágenes.
-- **Decodificado > 0, mostrado > 0 pero negro:** revisar la salida Surface/driver;
-  «mostrado» cuenta buffers entregados para renderizar, no una medición del panel físico.
-- **Audio RX = 0:** no están llegando paquetes de sonido a la app.
-- **Audio RX > 0, reproducido = 0:** la salida de audio no avanza; comprueba también
-  «silenciado», «sin foco» y el buffer nativo.
+If connected without video or sound, select **Close panel** and inspect:
 
-Windows funcionando por red con la misma Switch confirma que existe un stream
-utilizable, pero estos contadores son necesarios para localizar el punto de fallo
-en el hardware Android. Los fallos corregidos se han reproducido con dobles de
-drivers; no se ha confirmado aún cuál afectaba al televisor del usuario.
+- **Video RX > 0, decoded = 0:** the decoder is not producing images.
+- **Decoded > 0, shown > 0, but black:** investigate the Surface/driver output.
+  Shown counts buffers submitted for rendering, not a physical panel measurement.
+- **Audio RX = 0:** no audio packets are reaching the viewer.
+- **Audio RX > 0, played = 0:** audio output is not advancing. Also check the muted
+  state, audio focus, and actual TV buffer size.
+
+Windows playback with the same Switch confirms that a usable stream exists.
+These counters help locate a failure in the Android pipeline. The corrected failure
+modes have been reproduced with driver test doubles; which one affected the reported
+TV has not yet been confirmed.

@@ -8,7 +8,7 @@ import zipfile
 project = Path(__file__).resolve().parents[1]
 dist = project.parent / "dist"
 dist.mkdir(exist_ok=True)
-version = "0.1.1-preview"
+version = "0.1.2-preview"
 apk = dist / f"SwitchFrameTapTV-{version}.apk"
 shutil.copy2(project / "app/build/outputs/apk/debug/app-debug.apk", apk)
 archive = dist / f"SwitchFrameTapTV-{version}-source.zip"

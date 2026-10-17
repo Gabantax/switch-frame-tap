@@ -32,18 +32,18 @@ final class SftProtocol {
         byte[] h = new byte[32];
         readFully(source, h, true, stopped);
         long receivedNs = System.nanoTime();
-        if (u32(h, 0) != 0x52544653L) throw new IOException("Cabecera SFTR inválida");
-        if (u16(h, 4) != 2) throw new IOException("Se requiere el protocolo SFTR v2");
+        if (u32(h, 0) != 0x52544653L) throw new IOException("Invalid SFTR header");
+        if (u16(h, 4) != 2) throw new IOException("SFTR protocol v2 is required");
         int flags = u16(h, 6);
         long w = u32(h, 8), height = u32(h, 12), n = u32(h, 20);
-        if ((flags & ~(VIDEO | KEY | AUDIO)) != 0) throw new IOException("Formato de stream no compatible");
+        if ((flags & ~(VIDEO | KEY | AUDIO)) != 0) throw new IOException("Unsupported stream format");
         boolean audio = (flags & AUDIO) != 0;
         if (audio) {
             if (flags != AUDIO || w != 48000 || height != 2 || n == 0 || n > MAX_AUDIO || n % 4 != 0)
-                throw new IOException("Paquete PCM inválido: se requiere 48 kHz estéreo, 16 bits");
+                throw new IOException("Invalid PCM packet: 48 kHz stereo, 16-bit audio is required");
         } else if ((flags & VIDEO) == 0 || w < 16 || w > 1920 || height < 16 || height > 1088
                 || w % 2 != 0 || height % 2 != 0 || n == 0 || n > MAX_VIDEO) {
-            throw new IOException("Paquete H.264 inválido o demasiado grande");
+            throw new IOException("Invalid or oversized H.264 packet");
         }
         byte[] data = new byte[(int)n];
         readFully(source, data, false, stopped);
@@ -53,11 +53,11 @@ final class SftProtocol {
         int done = 0;
         long deadline = idleAllowed ? Long.MAX_VALUE : System.nanoTime() + 5_000_000_000L;
         while (done < data.length) {
-            if (stop.stopped()) throw new IOException("Conexión detenida");
-            if (System.nanoTime() > deadline) throw new IOException("Paquete incompleto: tiempo agotado");
+            if (stop.stopped()) throw new IOException("Connection stopped");
+            if (System.nanoTime() > deadline) throw new IOException("Incomplete packet: read timed out");
             int n = s.read(data, done, data.length - done);
-            if (n < 0) throw new EOFException("La Switch cerró la conexión");
-            if (n > data.length - done) throw new IOException("Lectura fuera de límites");
+            if (n < 0) throw new EOFException("The Switch closed the connection");
+            if (n > data.length - done) throw new IOException("Read exceeds buffer bounds");
             if (n > 0) {
                 if (done == 0 && idleAllowed) deadline = System.nanoTime() + 5_000_000_000L;
                 done += n;
@@ -82,7 +82,7 @@ final class SftProtocol {
             if (type == 8) pps = Arrays.copyOfRange(data, start, end);
             i = end;
         }
-        if (sps == null || pps == null) throw new IOException("El fotograma clave no contiene SPS/PPS");
+        if (sps == null || pps == null) throw new IOException("The keyframe does not contain SPS/PPS");
         return new byte[][] {sps, pps};
     }
     private static int prefix(byte[] b, int i) {

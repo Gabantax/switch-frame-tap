@@ -75,12 +75,12 @@ final class VideoDecoder implements AutoCloseable {
                     int index = codec.dequeueInputBuffer(2000);
                     if (index < 0) {
                         if (System.nanoTime() - inputWaitNs > 500_000_000L)
-                            throw new IOException("El decodificador no responde");
+                            throw new IOException("The decoder is not responding");
                         continue;
                     }
                     ByteBuffer buffer = codec.getInputBuffer(index);
                     if (buffer == null || buffer.capacity() < pending.data.length)
-                        throw new IOException("El decodificador no admite este tamaño de fotograma; baja la calidad en la Switch");
+                        throw new IOException("The decoder cannot accept this frame size; lower the quality on the Switch");
                     ((java.nio.Buffer)buffer).clear(); buffer.put(pending.data);
                     if (ptsOriginNs == 0) ptsOriginNs = pending.receivedNs;
                     long pts = Math.max(lastPts + 1, (pending.receivedNs - ptsOriginNs) / 1000);
@@ -91,13 +91,13 @@ final class VideoDecoder implements AutoCloseable {
                     if (firstInputNs == 0) firstInputNs = System.nanoTime();
                     long progress = lastOutputNs == 0 ? firstInputNs : lastOutputNs;
                     if (inputsSinceOutput >= 8 && System.nanoTime() - progress > 1_500_000_000L)
-                        throw new IOException("El decodificador acepta datos pero no entrega imagen");
+                        throw new IOException("The decoder accepts input but produces no video output");
                     inputWaitNs = System.nanoTime(); pending = null; configuredPacket = null;
                 } catch (IOException | RuntimeException e) {
                     stats.decoderErrors++;
                     if (codec != null) failedCodecs.add(codecName);
                     releaseCodec(); queue.recover(); pending = null; configuredPacket = null;
-                    status.accept("Imagen: " + e.getMessage() + ". Esperando otro fotograma clave…");
+                    status.accept("Video: " + e.getMessage() + ". Waiting for another keyframe…");
                     Log.w("SFT-TV", "Video", e);
                 }
             }
@@ -127,7 +127,7 @@ final class VideoDecoder implements AutoCloseable {
             }
         }
         Collections.sort(candidates, (a,b) -> Integer.compare(score(a), score(b)));
-        String lastFailure = "No hay decodificador H.264 para " + width + "×" + height;
+        String lastFailure = "No H.264 decoder is available for " + width + "×" + height;
         for (MediaCodecInfo item : candidates) {
             for (int optimized = 1; optimized >= 0; optimized--) {
                 MediaCodec attempt = null;
@@ -149,8 +149,8 @@ final class VideoDecoder implements AutoCloseable {
                     codec = attempt; codecName = item.getName();
                     stats.width = width; stats.height = height;
                     stats.decoder = codecName + (software(item) ? " · software" : " · hardware")
-                            + (optimized == 1 && lowLatency(item) ? " · baja latencia" : "");
-                    status.accept("Recibiendo " + width + "×" + height + (software(item) ? " · modo compatible" : ""));
+                            + (optimized == 1 && lowLatency(item) ? " · low latency" : "");
+                    status.accept("Receiving " + width + "×" + height + (software(item) ? " · compatibility mode" : ""));
                     return;
                 } catch (IOException | RuntimeException e) {
                     lastFailure = item.getName() + ": " + e.getMessage();

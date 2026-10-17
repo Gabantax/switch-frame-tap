@@ -50,7 +50,7 @@ final class AudioPump implements AutoCloseable {
     }
     private AudioTrack createTrack() {
         int min = AudioTrack.getMinBufferSize(48000, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT);
-        if (min <= 0) throw new IllegalStateException("Salida PCM no disponible");
+        if (min <= 0) throw new IllegalStateException("PCM output is not available");
         AudioTrack.Builder builder = new AudioTrack.Builder()
                 .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build())
@@ -61,7 +61,7 @@ final class AudioPump implements AutoCloseable {
         if (Build.VERSION.SDK_INT >= 26) builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY);
         AudioTrack track = builder.build();
         if (track.getState() != AudioTrack.STATE_INITIALIZED) {
-            track.release(); throw new IllegalStateException("No se pudo iniciar el audio");
+            track.release(); throw new IllegalStateException("Could not initialize audio output");
         }
         return track;
     }
@@ -84,7 +84,7 @@ final class AudioPump implements AutoCloseable {
                                 AudioFormat.ENCODING_PCM_16BIT)), AudioTrack.MODE_STREAM, 0);
                 if (track.getState() != AudioTrack.STATE_INITIALIZED) throw e;
             }
-            stats.audio = "PCM 48 kHz estéreo";
+            stats.audio = "PCM 48 kHz stereo";
             stats.audioBufferMs = track.getBufferSizeInFrames() / 48.0;
             if (Build.VERSION.SDK_INT >= 31) {
                 try { track.setStartThresholdInFrames(Math.min(track.getBufferSizeInFrames(), stable ? 2880 : 960)); }
@@ -126,7 +126,7 @@ final class AudioPump implements AutoCloseable {
                 // AudioTrack bounds its own queue. An 80 ms flush limit can prevent
                 // playback forever when a TV requires >80 ms of data to start.
                 int n = track.write(buffer, buffer.remaining(), AudioTrack.WRITE_NON_BLOCKING);
-                if (n < 0) throw new IllegalStateException("Error de salida de audio: " + n);
+                if (n < 0) throw new IllegalStateException("Audio output error: " + n);
                 writtenFrames += n / 4;
                 stats.audioWrittenFrames += n / 4;
                 if (!buffer.hasRemaining()) { pending = null; buffer = null; }
@@ -134,7 +134,7 @@ final class AudioPump implements AutoCloseable {
             }
         } catch (InterruptedException ignored) {
         } catch (RuntimeException e) {
-            failed = true; stats.audio = "Audio no disponible: " + e.getMessage();
+            failed = true; stats.audio = "Audio unavailable: " + e.getMessage();
             Log.w("SFT-TV", "Audio", e);
         } finally {
             if (track != null) { try { track.pause(); track.flush(); } catch (RuntimeException ignored) { } track.release(); }

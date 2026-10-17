@@ -1,158 +1,160 @@
-# Switch Frame Tap TV — preview 0.1.1
+# Switch Frame Tap TV - preview 0.1.2
 
-Viewer para **Android TV / Google TV desde Android 6.0 (API 23)**. Recibe vídeo
-H.264 y audio PCM de Switch Frame Tap directamente de la consola, por red local
-o USB. Solo reproduce: el mando de juego sigue conectado a la Switch.
+An **Android TV / Google TV viewer for Android 6.0 (API 23) and later**. It receives
+H.264 video and PCM audio directly from Switch Frame Tap over a local network or
+USB. The controller remains connected to the Switch; this app only receives and
+plays video and audio. All application labels, status messages, and diagnostics
+are in English.
 
-Es una primera versión para pruebas. Se ha compilado y comprobado el protocolo
-con una captura real del repositorio. **Todavía no se ha validado la reproducción
-en un televisor físico, ni medido la latencia real en Android.**
+This is a preview. The build, protocol parsing, and playback-worker regressions
+have been checked on the development machine. An earlier preview connected on a
+Vestel Cosmos running Android 11 but did not display video or play audio. Version
+0.1.1 addressed playback issues reproduced with driver test doubles; confirmation
+on that TV is still pending. Version 0.1.2 translates the interface and documentation
+into English. **Successful playback and end-to-end latency on physical TVs remain
+to be validated.**
 
-## Instalar y conectar
+## Installation and connection
 
-1. Copia `SwitchFrameTapTV-0.1.1-preview.apk` al televisor o TV Box y ábrela
-   desde un gestor de archivos que permita instalar APK. Autoriza la instalación
-   desde ese gestor cuando Android lo solicite. Aparece como **Switch Frame Tap TV**
-   en el launcher de TV. La APK de prueba está firmada con una clave de desarrollo.
-2. En la Switch, usa el manager de Switch Frame Tap para elegir la conexión.
-   Reinicia la consola si lo solicita. Mantén el streamer instalado y activo.
-3. **Red:** elige Network en la Switch y Red en la TV. Ambos equipos deben estar
-   en la misma red. Deja la IP vacía para buscar por el anuncio UDP y la última
-   dirección utilizada, o introduce la IP que muestra el manager de la consola.
-   Pulsa **Conectar**. El stream usa TCP 9950 y el descubrimiento UDP 9951.
-   Si el router filtra anuncios, usa la IP manual; la app no escanea la subred.
-4. **USB:** elige USB viewer en la Switch y USB en la TV. Conecta el USB-C de la
-   Switch directamente a un puerto USB host del televisor con un cable de datos.
-   Pulsa **Conectar** y autoriza el acceso al USB. No uses el modo webcam/UVC.
-   La Switch debe estar en modo portátil para dejar libre su USB-C.
-5. Abre un juego. La app pasa a pantalla completa cuando recibe imagen reciente.
-   Cierra el viewer de Windows antes: el streamer admite un único viewer.
+1. Copy `SwitchFrameTapTV-0.1.2-preview.apk` to the TV or TV box and open it with a
+   file manager that supports APK installation. Allow installation from that file
+   manager when Android asks. The app appears as **Switch Frame Tap TV** in the TV
+   launcher. This preview APK is signed with a development key.
+2. Use the Switch Frame Tap manager on the console to choose the connection mode.
+   Restart the console if requested. Keep the streamer installed and enabled.
+3. **Network:** select Network on both the Switch and TV. Both devices must be on
+   the same local network. Leave the IP address blank for UDP discovery and the
+   last successful address, or enter the address displayed by the console's manager.
+   Select **Connect**. Streaming uses TCP 9950; discovery uses UDP 9951. If the router
+   filters announcements, enter the IP address manually. The app does not scan the subnet.
+4. **USB:** select USB viewer on the Switch and USB on the TV. Connect the Switch's
+   USB-C port directly to a USB host port on the TV with a data cable. Select
+   **Connect** and allow USB access. Webcam/UVC modes are not supported by this
+   receiver. The Switch must be handheld to leave its USB-C port available.
+5. Open a game. The app hides the controls when it starts presenting video. Close
+   the PC viewer first: the streamer supports only one connected viewer.
 
-En red la Switch puede permanecer en el dock. Cambiar entre red y USB en la APK
-no cambia el modo elegido en la consola; configura también la Switch.
+The Switch can remain docked when using Network. Changing the mode in the Android
+app does not change the console configuration; select the matching mode on the
+Switch as well.
 
-## Mando de la TV
+## TV remote controls
 
-- Flechas: navegar por los controles; OK: seleccionar.
-- Durante el vídeo, OK o Menú abre los controles. Atrás vuelve al vídeo.
-- **Cerrar panel**, arriba a la derecha, oculta los controles sin desconectar.
-  Funciona también cuando no hay imagen; el panel no vuelve a abrirse solo hasta
-  que pulses OK, Menú o Atrás. Así puedes ver las estadísticas completas.
-- En la pantalla sin conexión, Atrás sale de la app.
-- **Silenciar audio** afecta al viewer, no a la consola.
-- **Audio estable** aumenta el buffer solicitado de 20 a 60 ms, sujeto al mínimo
-  del dispositivo. Déjalo desactivado para priorizar menor retardo. Activarlo
-  reinicia la conexión y puede ayudar si el sonido se corta.
-- **Mostrar estadísticas** muestra FPS enviados a la pantalla, bitrate,
-  FPS recibidos y decodificados, decodificador, descartes, audio recibido,
-  avance del audio reproducido, buffer real de la TV y estado del foco de audio.
+- Use the arrow keys to navigate and OK to select a control.
+- During playback, OK, Menu, or Back opens the controls. While connected, Back
+  closes the controls and returns to the video.
+- **Close panel**, at the top right, hides the controls without disconnecting.
+  This also works without video. The panel stays closed until you open it with
+  OK, Menu, or Back, allowing you to read the full statistics overlay.
+- When disconnected and the panel is open, Back exits the app.
+- **Mute audio** affects playback in the viewer, not the console.
+- **Stable audio** requests a 60 ms buffer instead of 20 ms, subject to the output
+  device's minimum. Leave it off to prioritize lower latency. Changing it restarts
+  the connection and may help with audio dropouts.
+- **Show statistics** displays received, decoded, and presented frame rates;
+  bitrate; decoder selection; dropped frames; incoming audio; playback progress;
+  the TV's actual audio buffer size; and audio focus state.
 
-La app detiene la conexión y libera audio/USB al salir a otra aplicación o
-suspenderse. Al volver, reanuda la conexión si estaba activa.
+The app closes the connection and releases audio/USB resources when it goes into
+the background. It reconnects on return if the connection was active.
 
-## Calidad y retardo
+## Quality and latency
 
-La app no recodifica el vídeo ni reduce su resolución. Recibe la calidad elegida
-en la Switch, que puede adaptarla automáticamente a la capacidad de la red.
-Para empezar, elige High y 1080p en la consola si tu configuración lo permite.
-Si aparecen pausas o resincronizaciones, prueba Medium o 720p en la consola.
-1080p60 depende también del juego y de la capacidad de captura de la Switch;
-la app no convierte un juego de 30 fps en 60 fps.
+The app preserves the received H.264 stream without re-encoding or reducing its
+resolution. Quality is selected on the Switch, whose network sender can adjust it
+to the available bandwidth. Start with High and 1080p if your configuration supports
+them. If playback pauses or repeatedly resynchronizes, try Medium or 720p on the
+console. Actual 1080p60 capture also depends on the game and Switch setup; the app
+does not turn a 30 fps game into 60 fps.
 
-La reproducción da prioridad a los decodificadores H.264 de hardware. En Android
-11 o posterior solicita baja latencia si el decoder declara soporte. Si las
-opciones optimizadas fallan, intenta una configuración básica y otros decoders,
-incluido software como último recurso; puede aumentar el retardo.
+Hardware H.264 decoders are preferred. On Android 11 and later, low-latency decoding
+is requested when the driver advertises support. If an optimized configuration
+fails, the app tries a basic configuration and other decoders, with software as a
+last resort. Software decoding can increase latency.
 
-No se acumula una cola ilimitada para mantener la imagen fluida. Se muestra la
-salida decodificada más reciente y se recupera desde un IDR si se pierden referencias o se
-satura la cola de entrada. Esto conserva los píxeles del vídeo mostrado, pero
-en un dispositivo o enlace insuficiente puede haber saltos o pausas hasta el
-siguiente fotograma clave. No se promete simultáneamente calidad máxima y una
-latencia fija en cualquier televisor.
+Queues are bounded. The newest decoded output is presented, and input reference
+recovery starts at an IDR after a gap or queue overflow. A device or connection
+that cannot keep up can cause skipped frames or a pause until the next keyframe.
+Maximum quality and a fixed low latency cannot be guaranteed on every TV.
 
-La preview 0.1.1 corrige un reinicio repetido del decoder cuando su primer buffer
-tarda en estar disponible. Usa PTS relativos y admite drivers que modifiquen
-las marcas de tiempo. Elimina el descarte fijo de todas las salidas que superen
-120 ms, que podía mantener la pantalla negra en un pipeline lento. Si un decoder
-acepta fotogramas pero no entrega salida, intenta otro desde un IDR.
+Version 0.1.1 fixes repeated decoder initialization while waiting for the first
+input buffer. It uses relative presentation timestamps and handles drivers that
+rewrite them. It also removes the fixed 120 ms output rejection threshold, which
+could discard every frame in a deeper pipeline. A decoder that accepts input but
+produces no output is replaced at a subsequent IDR.
 
-El audio ya no se vacía al resincronizar el vídeo ni al superar un límite fijo
-de 80 ms: algunos televisores necesitan un buffer nativo mayor para empezar a
-reproducir. La cola del sistema queda limitada por AudioTrack, manteniendo pequeño
-el buffer de la aplicación. El buffer real y el foco de audio se muestran en las
-estadísticas. En Android 12 o posterior se solicita también un umbral de inicio
-bajo cuando el driver lo permite.
+Audio is no longer flushed when video resynchronizes or whenever its native queue
+exceeds 80 ms. Some TVs require a larger native buffer before playback can start.
+AudioTrack bounds the system queue while the application keeps its own queue small.
+On Android 12 and later, a low start threshold is requested when the driver allows it.
 
-**Las estadísticas no miden la latencia total:** «Cola + decodificación» va desde
-la recepción de la cabecera hasta entregar el buffer al sistema de pantalla.
-No incluye el retardo desconocido de red anterior a la llegada ni el procesamiento
-del panel. «Consola» es la edad enviada por el streamer. Son medidas distintas.
-El protocolo no proporciona un reloj de presentación común para audio y vídeo;
-se controla la acumulación de ambos con buffers pequeños.
+**Statistics do not measure total end-to-end latency.** Queue + decode measures
+the interval from receiving the packet header to submitting decoded output for
+display. It excludes network delay before arrival and the panel's own processing.
+Console age comes from the sender and is a separate measurement. The protocol does
+not provide a shared presentation clock for audio and video; the viewer limits
+queue accumulation with small buffers.
 
-## Compatibilidad
+## Compatibility
 
-Un mismo APK contiene código Java y recursos, sin bibliotecas nativas por CPU:
-sirve para ARM de 32/64 bits y otros dispositivos que cumplan las APIs requeridas.
-Se ha diseñado para Android TV, Google TV y Sony con Android TV, **desde Android
-6**, sin una lista de modelos comprobados todavía. Sony con otro sistema operativo
-o Android anterior a 6 no es compatible con esta versión.
+The same APK contains Java code and resources without CPU-specific native libraries.
+It is intended for Android TV and Google TV devices, including Sony TVs running
+Android TV, with **Android 6.0 or later**. There is no confirmed model compatibility
+list yet. Sony TVs with another operating system or Android older than 6.0 are not
+supported by this version.
 
-USB es opcional y se detecta en ejecución: el firmware del televisor debe ofrecer
-USB host y permitir abrir la interfaz bulk del dispositivo `1209:5f1e`, interfaz 0,
-endpoint `0x81`. Un puerto para memorias USB no confirma por sí solo que esto funcione.
-La conexión por red funciona independientemente de esa capacidad.
+USB is optional and detected at runtime. The TV firmware must expose USB host
+support and permit access to device `1209:5f1e`, interface 0, bulk IN endpoint `0x81`.
+A port that supports USB storage does not by itself confirm this capability.
+Network reception does not depend on USB host support.
 
-## Construir
+## Building
 
-Requisitos: JDK 17, Android SDK Platform 34 y Build Tools 34. Configura `JAVA_HOME`
-y `ANDROID_HOME`, o el SDK mediante `local.properties` (no se distribuye). El wrapper
-usa Gradle 8.5 y el plugin Android 8.3.0. La primera ejecución descarga dependencias.
-No se usan dependencias de UI ni FFmpeg/SDL/libusb en la app Android.
+See [BUILDING.md](BUILDING.md) for requirements, environment setup, SDK installation,
+build commands, tests, and optional distribution packaging.
 
-Desde `android-tv/`:
+With JDK 17 and Android SDK Platform 34 / Build Tools 34.0.0 configured, run from
+`android-tv/` on Windows:
 
 ```powershell
 .\gradlew.bat :app:assembleDebug :app:protocolTest :app:playbackTest :app:lintDebug
 python tools/package.py
 ```
 
-En Linux/macOS, usa `bash gradlew` en lugar de `gradlew.bat`.
-El APK generado está en `app/build/outputs/apk/debug/app-debug.apk`; el empaquetador
-lo copia a `../dist/` junto con el código fuente y checksums SHA-256.
+On Linux/macOS, use `bash gradlew` in place of `.\gradlew.bat`.
+The APK is generated at `app/build/outputs/apk/debug/app-debug.apk`. Packaging copies
+it to `../dist/` with the corresponding source archive and SHA-256 checksums.
 
-El target SDK 34 se usa para esta preview de instalación manual. No se presenta
-como una publicación lista para Google Play; publicar requerirá actualizar el
-target y revisar los permisos de red local de las versiones nuevas de Android.
+This manually installed preview targets SDK 34. A Google Play release would require
+reviewing the current target SDK and newer Android local-network permissions.
 
-## Probar sin la Switch
+## Testing without a Switch
 
-Desde la raíz del repositorio, en un PC en la misma LAN que la TV:
+From the full repository root, on a PC on the same local network as the TV:
 
-```powershell
+```shell
 python android-tv/tools/replay_server.py logs/m83-runI/stream-first10.sft --tone
 ```
 
-Introduce en la TV la IP que imprime el servidor y pulsa Conectar. El servidor
-repite la captura H.264 real e inserta un tono estéreo de 440 Hz. Permite comprobar
-decodificación, sonido y reconexión TCP sin tocar la consola. La captura antigua
-es IDR-only, por lo que no sustituye una prueba con el stream actual de IDR/P.
-No mide el USB ni la latencia real de la Switch. El fixture pertenece al repositorio
-original; no se incluye en el ZIP del código de Android.
+Enter the address printed by the server in the TV app and select **Connect**.
+The server loops a real H.264 capture and generates a 440 Hz stereo PCM tone. This
+allows testing Android decoding, audio, and TCP reconnection separately from the
+console. The older capture contains only IDR frames; it does not replace testing
+the current IDR/P stream, USB, or actual Switch latency. The fixture belongs to the
+original repository and is not included in the Android source ZIP.
 
-Consulta [VALIDATION.md](VALIDATION.md) para lo comprobado y la prueba en TV pendiente.
+See [VALIDATION.md](VALIDATION.md) for completed checks and the pending TV test plan.
 
-## Fuentes y licencia
+## Credits and license
 
-Derivado del protocolo y del viewer de **Tomas Uribe**,
+Based on the protocol and viewer by **Tomas Uribe**,
 [switch-frame-tap](https://github.com/TomasUribe/switch-frame-tap).
-`LICENSE` contiene GPL-2.0 y `UPSTREAM-NOTICE` conserva los créditos originales.
-El ZIP acompaña al APK con el código fuente correspondiente del viewer Android.
+`LICENSE` contains GPL-2.0, and `UPSTREAM-NOTICE` preserves the upstream credits.
+The distribution includes the corresponding source code for the Android viewer.
 
-APIs contrastadas con documentación oficial:
+Official API references:
 [MediaCodec](https://developer.android.com/reference/android/media/MediaCodec),
-[baja latencia](https://source.android.com/docs/core/media/low-latency-media),
+[low-latency decoding](https://source.android.com/docs/core/media/low-latency-media),
 [AudioTrack](https://developer.android.com/reference/android/media/AudioTrack),
 [USB](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection),
 [Android TV](https://developer.android.com/training/tv/get-started/create).

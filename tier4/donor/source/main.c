@@ -63,11 +63,17 @@ int main(int argc, char **argv) {
     if (R_FAILED(smGetService(&ctl, "sftap"))) { return 1; }
     smExit();   /* sm only for this */
 
+    /* v0.7.14: the module may ask for less (sftap 13: the HOME menu streaming
+     * beside a big applet such as System Settings); a module before it: 42 */
+    u32 cap_mb = 42;
+    if (R_FAILED(serviceDispatchOut(&ctl, 13, cap_mb)) || cap_mb < 12 || cap_mb > 42) { cap_mb = 42; }
+
     /* the largest the Applet pool grants (2 MB steps, the heap unit) */
     static const u32 sizes_mb[] = { 42, 38, 34, 30, 26, 22, 18, 14, 12 };
     void *addr = NULL;
     u64 size = 0;
     for (u32 i = 0; i < sizeof(sizes_mb) / sizeof(sizes_mb[0]); ++i) {
+        if (sizes_mb[i] > cap_mb) { continue; }
         if (R_SUCCEEDED(svcSetHeapSize(&addr, (u64)sizes_mb[i] << 20))) { size = (u64)sizes_mb[i] << 20; break; }
     }
 

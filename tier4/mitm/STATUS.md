@@ -376,6 +376,22 @@ MapCmdBuffer as before. Probe (probe-ui.txt "nodispdrv novi nosnap"): a
 memory map whenever the Applet pool jumps 100 MB - where Settings' frames
 live.
 
+**test5 run (`logs/v0714-test5`):** the address-0 guard worked (sphaira,
+then a game - fine); the user picker streams. **System Settings is the HOME
+menu itself** - no new process; qlaunch grows a 307 MB heap (no buffer of
+its own mapped for the display) and draws into the shared slots as before.
+The pause is memory: the Applet pool reached 454 of 500 MB with our 41, the
+watch released at < 48 MB free, and the setup gate (free < 96) held the
+engines until Settings closed.
+
+**test6:** the donor asks the module for a size cap (sftap 13, GetDonorCap;
+an older module: 42 MB as before). While the HOME menu streams, the cap is
+the Applet pool's free memory less the 48 MB margin, at least 30 MB (720p's
+capture region ~22 MB + engine buffers); the setup gate waits only while
+fewer than 30 + 48 MB are free. With Settings open (~87 MB free without
+us) the donor takes 38 MB and 49 stay free. A game streamed on a capped
+donor may drop to 720p until the engines restart.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

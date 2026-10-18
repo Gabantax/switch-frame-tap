@@ -109,6 +109,12 @@ namespace ams::mitm::applet {
                     DonorFailed(rc);
                     R_SUCCEED();
                 }
+                /* v0.7.14: the most the donor may take (MB) - less than the usual
+                 * 42 while the HOME menu streams beside a big applet (Settings) */
+                Result GetDonorCap(sf::Out<u32> out_mb) {
+                    out_mb.SetValue(DonorCapMb());
+                    R_SUCCEED();
+                }
                 Result SetAppExcluded(u64 program_id, u8 excluded) {
                     if (program_id == 0) { R_SUCCEED(); }
                     {

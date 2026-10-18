@@ -72,7 +72,19 @@ namespace ams::mitm::applet {
             return g_ui_session_active.load(std::memory_order_relaxed) || (g_ui_stream_armed && g_app_pid.load(std::memory_order_relaxed) == 0);
         }
         constexpr u64 TightMb = 48;
+        /* v0.7.14: the smallest donor that streams 720p (capture region
+         * >= ~22 MB plus the engine buffers) and the usual one */
+        constexpr u32 MinDonorMb = 30, FullDonorMb = 42;
+        constinit std::atomic<u32> g_cap_mb{FullDonorMb};
+
+        u64 AppletFreeMb() {
+            u64 cur = 0, lim = 0;
+            if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { return 0; }
+            return (lim - cur) >> 20;
+        }
     }
+
+    u32 DonorCapMb() { return g_cap_mb.load(std::memory_order_relaxed); }
 
     namespace {
         alignas(os::ThreadStackAlignment) constinit u8 g_watch_stack[8_KB];
@@ -201,7 +213,7 @@ namespace ams::mitm::applet {
         if (out_mb != nullptr) { *out_mb = mb; }
         /* v0.7.14: for the HOME menu, busy only with a web applet open or no
          * room for the donor (its ~42 MB) and the margin */
-        if (HomeMenuRules()) { return WebAppletRunning() || (lim >> 20) - mb < 48 + TightMb; }
+        if (HomeMenuRules()) { return WebAppletRunning() || (lim >> 20) - mb < MinDonorMb + TightMb; }
         return mb > BusyMb;
     }
 
@@ -209,6 +221,17 @@ namespace ams::mitm::applet {
         std::scoped_lock lk(g_lock);
         if (!g_mapped) {
             g_state.store(0);
+            /* v0.7.14: beside a big applet (System Settings: the pool at 413
+             * of 500 MB without us) the HOME menu streams on a smaller donor,
+             * leaving the margin free (test5: 41 MB left 46 - the stream stopped) */
+            u32 cap = FullDonorMb;
+            if (HomeMenuRules()) {
+                const u64 free_mb = AppletFreeMb();
+                const u64 room = free_mb > TightMb ? free_mb - TightMb : 0;
+                cap = room >= FullDonorMb ? FullDonorMb : (room >= MinDonorMb ? static_cast<u32>(room) : MinDonorMb);
+                if (cap < FullDonorMb) { LogLine("donor: the Applet pool has %llu MB free - taking at most %u MB", static_cast<unsigned long long>(free_mb), cap); }
+            }
+            g_cap_mb.store(cap, std::memory_order_relaxed);
             {
                 SmUse sm_pm;
                 ::Result rc = ::pmshellInitialize();

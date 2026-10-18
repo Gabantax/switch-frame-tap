@@ -46,4 +46,8 @@ namespace ams::mitm::applet {
     bool DonorTakeNvTmem(os::NativeHandle *out, u64 *out_size);
     void DonorFailed(u32 rc);
 
+
+    /* v0.7.14: the donor asks this before it takes its heap (sftap 13) */
+    u32 DonorCapMb();
+
 }

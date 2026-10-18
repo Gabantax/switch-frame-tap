@@ -60,6 +60,7 @@ namespace ams::mitm::applet {
     AMS_SF_METHOD_INFO(C, H, 4, Result, SetScreenOff, (u8 on), (on)) \
     AMS_SF_METHOD_INFO(C, H, 10, Result, Donate, (u64 size, sf::CopyHandle &&tmem), (size, std::move(tmem))) \
     AMS_SF_METHOD_INFO(C, H, 11, Result, DonateFailed, (u32 rc), (rc)) \
-    AMS_SF_METHOD_INFO(C, H, 12, Result, Donate2, (u64 size, u64 nv_size, sf::CopyHandle &&tmem, sf::CopyHandle &&nv_tmem), (size, nv_size, std::move(tmem), std::move(nv_tmem)))
+    AMS_SF_METHOD_INFO(C, H, 12, Result, Donate2, (u64 size, u64 nv_size, sf::CopyHandle &&tmem, sf::CopyHandle &&nv_tmem), (size, nv_size, std::move(tmem), std::move(nv_tmem))) \
+    AMS_SF_METHOD_INFO(C, H, 13, Result, GetDonorCap, (sf::Out<u32> out_mb), (out_mb))
 
 AMS_SF_DEFINE_INTERFACE(ams::mitm::applet, IStreamControl, AMS_SFTAP_CONTROL_INTERFACE_INFO, 0x5F7A4001)

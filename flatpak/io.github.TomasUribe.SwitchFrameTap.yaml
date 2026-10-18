@@ -87,8 +87,8 @@ modules:
       - install -D io.github.TomasUribe.SwitchFrameTap.metainfo.xml /app/share/metainfo/io.github.TomasUribe.SwitchFrameTap.metainfo.xml
     sources:
       - type: archive
-        url: https://github.com/TomasUribe/switch-frame-tap/archive/refs/tags/v0.7.13.tar.gz
-        sha256: cda1a1d11bbb030fa8993c559bca2a3642ac7575806de1fa47de9126acf95a4e
+        url: https://github.com/TomasUribe/switch-frame-tap/archive/refs/tags/v0.7.13.1.tar.gz
+        sha256: 191d50eb4f391609e58306f4a0167d4b15d4d0023bfc55bde5a8e0159f5880bb
       - type: file
         path: io.github.TomasUribe.SwitchFrameTap.desktop
       - type: file

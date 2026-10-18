@@ -45,6 +45,14 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.13.1" date="2026-10-18">
+      <description>
+        <ul>
+          <li>Fixed streaming stopping until a reboot after closing some homebrew apps.</li>
+          <li>Fullscreen on a screen that is not 16:9 now suggests a 16:9 mode.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.13" date="2026-10-15">
       <description>
         <ul>

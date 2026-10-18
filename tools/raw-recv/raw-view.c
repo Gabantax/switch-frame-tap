@@ -34,8 +34,9 @@
  *                              # U cycles it, remembered in viewer.ini)
  *   ./raw-view --net 192.168.1.23   # v0.7: the stream over the network (the console
  *                              # with network streaming on); --app finds it by itself
- *   ./raw-view --no-aspect-lock  # allow free resize (default locks the window to 16:9;
- *                              # viewer.ini lock_aspect=0 / Settings / A toggles it)
+ *   ./raw-view --no-aspect-lock  # free resize (Windows default locks to 16:9 via WM_SIZING;
+ *                              # off by default on Linux/macOS so tiling WMs are left alone;
+ *                              # viewer.ini lock_aspect= / Settings / A toggles it)
  *   ./raw-view --chromeless    # borderless window; drag the picture to move (B / Settings;
  *                              # viewer.ini chromeless=1). Still resizable from the edges.
  *   R records to MP4 (v0.5) in Videos/Switch Frame Tap: the console's H.264 as it
@@ -130,8 +131,14 @@ static int g_pre_fs_valid = 0, g_pre_fs_x, g_pre_fs_y, g_pre_fs_w, g_pre_fs_h;
 #endif
 
 /* Lock the window client area to 16:9 while resizing (letterbox remains the
- * fallback inside a free rectangle / non-16:9 monitors). Default on. */
+ * fallback inside a free rectangle / non-16:9 monitors). Default on for
+ * Windows (WM_SIZING); off elsewhere so Linux tiling / half-screen snap is not
+ * rewritten by aspect_constrain_window on SIZE_CHANGED. */
+#ifdef _WIN32
 static int g_lock_aspect = 1;
+#else
+static int g_lock_aspect = 0;
+#endif
 static int g_lock_aspect_cli = -1;   /* -1 = use prefs; 0/1 from --no-aspect-lock / --aspect-lock */
 /* Optional borderless window; drag the client area to move. Default off. */
 static int g_chromeless = 0;
@@ -1402,7 +1409,12 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
         if (g_dragging || g_drag_pending) {
             if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT) {
                 const int was_click = g_drag_pending && !g_dragging;
+                const int was_drag = g_dragging;
                 g_dragging = g_drag_pending = 0;
+                if (was_drag) {
+                    window_geom_capture(win);
+                    prefs_save();
+                }
                 /* Click with no drag: if the down missed UI (stale hits), retry as a click
                  * so the cog / window buttons still fire. */
                 if (was_click && !g_ip_editing) {
@@ -1429,10 +1441,15 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             if (e.type == SDL_KEYDOWN || e.type == SDL_MOUSEBUTTONDOWN)
                 g_dragging = g_drag_pending = 0;
         }
-        /* v0.7.12: the settings drawer and the mouse first */
+        /* v0.7.12: the settings drawer and the mouse first.
+         * While streaming, the display loop already draws ui_overlay each frame -
+         * do not viewer_repaint() on every mouse move (extra vsync present without
+         * the upscaler/stats stalls and flickers). Home and Win32 live-resize still
+         * need an immediate redraw. */
         if (!g_ip_editing && ui_event(win, ren, &e)) {
             if (g_menu) menu_draw(ren);
-            else viewer_repaint();
+            else if (g_in_size_move || e.type != SDL_MOUSEMOTION)
+                viewer_repaint();
             continue;
         }
         if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT && e.button.clicks == 1 &&
@@ -1514,18 +1531,20 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
                 if (!g_dragging) g_drag_pending = 0;
             } else if ((e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
                         e.window.event == SDL_WINDOWEVENT_RESIZED) && !g_in_size_move) {
-                /* During Win32 live resize WM_SIZING already locks aspect; snapping
-                 * here mid-drag made the picture wait until the drag ended. */
+                /* Win32: WM_SIZING locks aspect during the drag; EXITSIZEMOVE snaps
+                 * and saves. Do not aspect_constrain here on Linux - tiling / half-
+                 * screen snap would fight the WM. Capture geom only; prefs on
+                 * exit-size-move / mouse-up / quit. */
+#ifdef _WIN32
                 aspect_constrain_window(win);
+#endif
                 window_geom_capture(win);
-                prefs_save();
             } else if (e.window.event == SDL_WINDOWEVENT_MOVED && !g_in_size_move) {
                 window_geom_capture(win);
-                prefs_save();
             } else if (e.window.event == SDL_WINDOWEVENT_MAXIMIZED ||
                        e.window.event == SDL_WINDOWEVENT_RESTORED) {
                 window_geom_capture(win);
-                prefs_save();
+                prefs_save(); /* discrete user action, not a drag stream */
             }
             /* resized, uncovered, or hover chrome: draw the last picture again */
             viewer_repaint();

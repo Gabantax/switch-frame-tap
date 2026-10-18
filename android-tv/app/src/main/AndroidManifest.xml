@@ -4,7 +4,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
-    <application android:allowBackup="false" android:label="Switch Frame Tap TV"
+    <application android:allowBackup="false" android:label="Switch Frame Tap"
         android:icon="@drawable/icon" android:banner="@drawable/banner"
         android:theme="@style/AppTheme" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true"

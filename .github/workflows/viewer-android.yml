@@ -1,0 +1,113 @@
+name: Android viewer
+
+# Builds the Android / Android TV viewer (android-tv/) on a version tag, or by
+# hand from the Actions tab; the APK is the run's artifact. By hand it can also
+# start an Android TV and a phone emulator and take screenshots of the app.
+# Signed with the release key when the SFT_ANDROID_* secrets are set, with the
+# debug key otherwise.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (default: the branch or tag)'
+        required: false
+      screenshots:
+        description: 'Screenshots on an Android TV and a phone emulator'
+        type: boolean
+        default: false
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Version
+        id: v
+        run: |
+          v="${{ inputs.version }}"; [ -n "$v" ] || v="${GITHUB_REF_NAME#v}"; v="${v//\//-}"
+          # 0.7.14-beta2 -> 714002, 0.7.14 -> 714009, 0.7.14.1 -> 714019 (always rising)
+          IFS=. read -r a b c d <<< "${v%%-*}"
+          beta=9; case "$v" in *-beta*) beta="${v##*-beta}"; beta="${beta%%[!0-9]*}";; *-*) beta=0;; esac
+          code=$(( ${b:-0} * 100000 + ${c:-0} * 1000 + ${d:-0} * 10 + ${beta:-0} ))
+          echo "version=$v" >> "$GITHUB_OUTPUT"; echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "version $v, versionCode $code"
+      - name: Release key
+        env:
+          KEYSTORE_B64: ${{ secrets.SFT_ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "SFT_ANDROID_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "signing with the release key"
+          else
+            echo "no release key in the secrets - signing with the debug key"
+          fi
+      - name: Test and build
+        working-directory: android-tv
+        env:
+          SFT_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.SFT_ANDROID_KEYSTORE_PASSWORD }}
+          SFT_ANDROID_KEY_ALIAS: ${{ secrets.SFT_ANDROID_KEY_ALIAS }}
+          SFT_ANDROID_KEY_PASSWORD: ${{ secrets.SFT_ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon protocolTest playbackTest assembleRelease -PsftVersion=${{ steps.v.outputs.version }} -PsftVersionCode=${{ steps.v.outputs.code }}
+      - name: Name the APK
+        run: |
+          mkdir -p dist
+          cp android-tv/app/build/outputs/apk/release/app-release.apk "dist/switch-frame-tap-${{ steps.v.outputs.version }}-android.apk"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: viewer-android
+          path: dist/*.apk
+
+  screenshots:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.screenshots }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: tv
+            target: android-tv
+            arch: x86
+            profile: tv_1080p
+          - name: phone
+            target: google_apis
+            arch: x86_64
+            profile: pixel_6
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: viewer-android
+          path: apk
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: ${{ matrix.target }}
+          arch: ${{ matrix.arch }}
+          profile: ${{ matrix.profile }}
+          disable-animations: true
+          script: |
+            mkdir -p shots
+            adb install -r apk/*.apk
+            adb shell am start -n io.github.switchframetap.tv/.MainActivity
+            sleep 8; adb exec-out screencap -p > shots/${{ matrix.name }}-1-home.png
+            adb shell input keyevent KEYCODE_MENU; sleep 3; adb exec-out screencap -p > shots/${{ matrix.name }}-2-settings.png
+            adb shell input keyevent KEYCODE_DPAD_DOWN; adb shell input keyevent KEYCODE_DPAD_DOWN; adb shell input keyevent KEYCODE_DPAD_DOWN; sleep 2; adb exec-out screencap -p > shots/${{ matrix.name }}-3-settings-focus.png
+            adb shell input keyevent KEYCODE_BACK; sleep 2; adb shell input keyevent KEYCODE_DPAD_UP; sleep 1; adb shell input keyevent KEYCODE_DPAD_CENTER; sleep 4; adb exec-out screencap -p > shots/${{ matrix.name }}-4-network.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ matrix.name }}
+          path: shots/

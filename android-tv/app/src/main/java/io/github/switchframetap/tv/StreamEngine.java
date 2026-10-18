@@ -20,6 +20,8 @@ import java.util.Set;
 final class StreamEngine {
     interface Listener {
         void status(String message);
+        /** The console says why there is no picture (reason 0 clears it). */
+        void consoleStatus(int reason, String head, String detail);
         void usbPermission(UsbDevice device);
         void connectedAddress(String ip);
     }
@@ -76,7 +78,10 @@ final class StreamEngine {
                     while (!stopped) {
                         SftProtocol.Packet packet = SftProtocol.readPacket(connected, () -> stopped);
                         stats.bytes += packet.data.length + 32;
-                        if (packet.audio()) {
+                        if (packet.status()) {
+                            if (!stopped) listener.consoleStatus(packet.statusReason(), packet.statusHead(), packet.statusDetail());
+                        }
+                        else if (packet.audio()) {
                             stats.audioPackets++; stats.audioBytes += packet.data.length;
                             a.offer(packet);
                         }

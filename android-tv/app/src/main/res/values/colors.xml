@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The PC viewer's theme (tools/raw-recv/ui.h) -->
+    <color name="icon_background">#0C0E12</color>
+    <color name="background">#0C0E12</color>
+    <color name="accent">#38BDF8</color>
+</resources>

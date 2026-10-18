@@ -52,6 +52,21 @@ public final class ProtocolTest {
         check(Arrays.equals(v.data,nal), "exact video boundary");
         byte[][] csd = SftProtocol.parameterSets(nal);
         check(csd[0][4] == 0x67 && csd[1][3] == 0x68, "mixed 3/4 byte Annex-B start codes");
+        // The console's USB keep-alive (an empty header) is skipped, not an error.
+        ByteArrayOutputStream hello = new ByteArrayOutputStream();
+        hello.write(wire(0,0,0,0,new byte[0])); hello.write(wire(0,0,0,0,new byte[0])); hello.write(wire(8,48000,2,2,audio));
+        SftProtocol.Packet afterHello = SftProtocol.readPacket(new Chunks(hello.toByteArray()), () -> false);
+        check(afterHello.audio() && afterHello.sequence == 2, "empty keep-alive headers skipped");
+        // Status: audio + status flags, rate 0; version, reason, 64-byte head, 120-byte detail.
+        byte[] st = new byte[192];
+        put(st,0,1); put(st,4,1);
+        byte[] head = "Connected - no game is running".getBytes("UTF-8"), detail = "Start a game.".getBytes("UTF-8");
+        System.arraycopy(head,0,st,8,head.length); System.arraycopy(detail,0,st,72,detail.length);
+        SftProtocol.Packet status = SftProtocol.readPacket(new Chunks(wire(24,0,0,3,st)), () -> false);
+        check(status.status() && !status.audio() && status.statusReason() == 1, "status packet recognised");
+        check(status.statusHead().equals("Connected - no game is running") && status.statusDetail().equals("Start a game."), "status text");
+        invalid(wire(18,0,0,0,st), "status only together with audio");
+        invalid(wire(24,0,0,0,new byte[4]), "status too short");
         invalid(Arrays.copyOf(wire(6,1280,720,0,nal),37), "truncated payload");
         byte[] bad = wire(6,1280,720,0,nal); bad[0]=0; invalid(bad,"bad magic");
         bad = wire(6,1280,720,0,nal); bad[4]=1; invalid(bad,"old version");

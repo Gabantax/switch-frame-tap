@@ -7,15 +7,33 @@ android {
         applicationId 'io.github.switchframetap.tv'
         minSdk 23
         targetSdk 34
-        versionCode 3
-        versionName '0.1.2-preview'
+        // Since 0.7.14 the app carries Switch Frame Tap's version; release builds
+        // pass it (.github/workflows/viewer-android.yml): -PsftVersion=0.7.14 -PsftVersionCode=714009
+        versionCode(project.hasProperty('sftVersionCode') ? project.property('sftVersionCode').toInteger() : 714000)
+        versionName(project.hasProperty('sftVersion') ? project.property('sftVersion') : '0.7.14-dev')
+    }
+    // The release key comes from the environment (CI secrets); without it the
+    // release build is signed with the debug key so it still installs.
+    signingConfigs {
+        release {
+            def ks = System.getenv('SFT_ANDROID_KEYSTORE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('SFT_ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('SFT_ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('SFT_ANDROID_KEY_PASSWORD')
+            }
+        }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
     buildTypes {
-        release { minifyEnabled false }
+        release {
+            minifyEnabled false
+            signingConfig System.getenv('SFT_ANDROID_KEYSTORE') ? signingConfigs.release : signingConfigs.debug
+        }
     }
     lint { abortOnError true }
 }

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The PC viewer's icon (tools/raw-recv/switch-frame-tap.svg), as paths. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="128dp" android:height="128dp" android:viewportWidth="128" android:viewportHeight="128">
+    <path android:fillColor="#1D1F24" android:pathData="M22,24h84a14,14 0 0 1 14,14v52a14,14 0 0 1 -14,14h-84a14,14 0 0 1 -14,-14v-52a14,14 0 0 1 14,-14z" />
+    <path android:fillColor="#00B8E6" android:pathData="M20,24a12,12 0 0 1 12,12v56a12,12 0 0 1 -12,12a12,12 0 0 1 -12,-12v-56a12,12 0 0 1 12,-12z" />
+    <path android:fillColor="#FF4B3E" android:pathData="M108,24a12,12 0 0 1 12,12v56a12,12 0 0 1 -12,12a12,12 0 0 1 -12,-12v-56a12,12 0 0 1 12,-12z" />
+    <path android:fillColor="#2C3038" android:pathData="M32,30h64v68h-64z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M54,48L78,64L54,80Z" />
+    <path android:fillColor="#1D1F24" android:pathData="M15,46a5,5 0 1 0 10,0a5,5 0 1 0 -10,0z" />
+    <path android:fillColor="#1D1F24" android:pathData="M103,82a5,5 0 1 0 10,0a5,5 0 1 0 -10,0z" />
+</vector>

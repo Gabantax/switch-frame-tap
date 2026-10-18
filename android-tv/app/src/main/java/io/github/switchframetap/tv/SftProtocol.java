@@ -7,8 +7,8 @@ import java.util.Arrays;
 
 /** SFTR v2, not the unrelated sw_hdr_t protocol under switch-stream/. */
 final class SftProtocol {
-    static final int VIDEO = 2, KEY = 4, AUDIO = 8;
-    static final int MAX_VIDEO = 8 * 1024 * 1024, MAX_AUDIO = 65536;
+    static final int VIDEO = 2, KEY = 4, AUDIO = 8, STATUS = 16;
+    static final int MAX_VIDEO = 8 * 1024 * 1024, MAX_AUDIO = 65536, MAX_STATUS = 4096;
     interface Stop { boolean stopped(); }
     interface Source extends AutoCloseable {
         /** Returns 0 on an idle timeout, -1 on EOF. Never discard partial reads. */
@@ -26,17 +26,36 @@ final class SftProtocol {
             this.receivedNs = receivedNs;
         }
         boolean key() { return (flags & KEY) != 0; }
-        boolean audio() { return (flags & AUDIO) != 0; }
+        boolean audio() { return (flags & AUDIO) != 0 && (flags & STATUS) == 0; }
+        /** The console's reason for showing no picture (Switch Frame Tap 0.7.10+). */
+        boolean status() { return (flags & STATUS) != 0; }
+        int statusReason() { return data.length >= 8 ? (int)u32(data, 4) : 0; }
+        String statusHead() { return cString(data, 8, 64); }
+        String statusDetail() { return cString(data, 72, 120); }
     }
     static Packet readPacket(Source source, Stop stopped) throws IOException {
         byte[] h = new byte[32];
-        readFully(source, h, true, stopped);
-        long receivedNs = System.nanoTime();
-        if (u32(h, 0) != 0x52544653L) throw new IOException("Invalid SFTR header");
-        if (u16(h, 4) != 2) throw new IOException("SFTR protocol v2 is required");
-        int flags = u16(h, 6);
-        long w = u32(h, 8), height = u32(h, 12), n = u32(h, 20);
-        if ((flags & ~(VIDEO | KEY | AUDIO)) != 0) throw new IOException("Unsupported stream format");
+        int flags;
+        long w, height, n, receivedNs;
+        while (true) {
+            readFully(source, h, true, stopped);
+            receivedNs = System.nanoTime();
+            if (u32(h, 0) != 0x52544653L) throw new IOException("Invalid SFTR header");
+            if (u16(h, 4) != 2) throw new IOException("SFTR protocol v2 is required");
+            flags = u16(h, 6);
+            w = u32(h, 8); height = u32(h, 12); n = u32(h, 20);
+            // An empty header is the console checking that a viewer reads (USB): nothing follows.
+            if (flags == 0 && n == 0) continue;
+            break;
+        }
+        if ((flags & ~(VIDEO | KEY | AUDIO | STATUS)) != 0) throw new IOException("Unsupported stream format");
+        if ((flags & STATUS) != 0) {
+            // Audio + status, rate 0: why there is no picture. Older viewers drop it as audio.
+            if (flags != (AUDIO | STATUS) || n < 8 || n > MAX_STATUS) throw new IOException("Invalid status packet");
+            byte[] data = new byte[(int)n];
+            readFully(source, data, false, stopped);
+            return new Packet(flags, 0, 0, u32(h, 28), u32(h, 16), data, receivedNs);
+        }
         boolean audio = (flags & AUDIO) != 0;
         if (audio) {
             if (flags != AUDIO || w != 48000 || height != 2 || n == 0 || n > MAX_AUDIO || n % 4 != 0)
@@ -63,6 +82,11 @@ final class SftProtocol {
                 done += n;
             }
         }
+    }
+    static String cString(byte[] b, int offset, int max) {
+        int end = offset;
+        while (end < b.length && end < offset + max && b[end] != 0) end++;
+        return offset >= b.length ? "" : new String(b, offset, end - offset, java.nio.charset.StandardCharsets.UTF_8);
     }
     static int u16(byte[] b, int i) { return (b[i] & 255) | ((b[i+1] & 255) << 8); }
     static long u32(byte[] b, int i) {

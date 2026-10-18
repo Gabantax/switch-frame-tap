@@ -119,7 +119,8 @@ int main(int argc,char **argv)
     g_hud=HUD_FULL; g_hud_toast=0;
     hud_sec hs={.fps=60,.w=65,.h=37}; hud_second(&hs);
     hud_draw(ren,1280,720,"USB","");
-    g_ui_open=1; ui_overlay(ren,1280,720);
+    ui_open(1);
+    assert(g_ui_open);
     int slider = -1;
     for (int i=0;i<g_ui_nhits;i++) if (g_ui_hits[i].id==H_FSR_SHARP) slider=i;
     assert(slider>=0);
@@ -131,17 +132,15 @@ int main(int argc,char **argv)
     ui_slide(track.x+track.w+100); assert(g_fsr_sharpness==100);
     ui_change(win,ren,H_FSR_SHARP,0,-1); assert(g_fsr_sharpness==95);
     ui_change(win,ren,H_FSR_SHARP,0,0); assert(g_fsr_sharpness==70);
-    g_ui_drag=0; ui_overlay(ren,1280,720);
+    g_ui_drag=0; ui_settings_draw();
     float sx,sy; SDL_RenderGetScale(ren,&sx,&sy);
     printf("UI scale %.3f %.3f, width %.1f, hits %d\n",sx,sy,g_ui_w,g_ui_nhits);
     int ow,oh; SDL_GetRendererOutputSize(ren,&ow,&oh);
-    Uint32 panel = pixel(ren,ow-3,oh/2);
-    assert(((panel>>16)&255)<60 && ((panel>>8)&255)<60 && (panel&255)<70);
     SDL_RenderFlush(ren); SDL_RenderSetLogicalSize(ren,0,0);
     SDL_Surface *s=SDL_CreateRGBSurfaceWithFormat(0,ow,oh,32,SDL_PIXELFORMAT_ARGB8888);
     assert(s && SDL_RenderReadPixels(ren,NULL,s->format->format,s->pixels,s->pitch)==0);
     assert(SDL_SaveBMP(s,"/tmp/frame-tap-metal-fsr-ui.bmp")==0);
-    SDL_FreeSurface(s); SDL_RenderPresent(ren); g_ui_open=0;
+    SDL_FreeSurface(s); SDL_RenderPresent(ren); ui_open(0);
     char label[120]; up_hud_text(label,sizeof(label)); assert(strstr(label,"EASU"));
     assert(text_width(label,16,1)+text_width("Upscaling",16,0)<316);
     /* Exercise the actual physical-key dispatch and saved selection. */

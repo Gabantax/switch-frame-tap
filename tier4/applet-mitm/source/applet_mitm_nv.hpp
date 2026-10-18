@@ -157,6 +157,14 @@ namespace ams::mitm::applet {
     constexpr u32 PresentRingSize = 8;
     extern PresentRec g_present_ring[PresentRingSize];
 
+    /* v0.7.14: one present into the records above - the game's queueBuffer
+     * (applet_mitm_service.cpp) or the HOME menu's (applet_mitm_uisource.cpp) */
+    void RecordPresent(s32 slot, bool have_fence, u32 fence_n, const u64 fence[4], u32 transform, const s32 crop[4]);
+    /* true while the HOME menu / an applet is the stream's source: the
+     * game's presents are not recorded, only noted (the session ends) */
+    extern std::atomic<bool> g_ui_session_active;
+    extern std::atomic<bool> g_game_presented_in_ui;
+
     /* M97: the overlay's view of live mode (sftap service). g_stream_enabled
      * is the overlay's switch: off, live mode ends any session, detaches from
      * the game and stops probing USB until it is turned on again. */

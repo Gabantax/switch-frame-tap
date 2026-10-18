@@ -287,6 +287,30 @@ and hashed twice - clean or changed under the read; plus one picture built
 from 64 KB pieces each read right after a present
 (`probe/capture-home1.raw`, `capture-home2.raw` after the applet).
 
+**probe7 run (`logs/v0714-probe7`, measured) - SOLVED:** the HOME menu's
+present message (layer 0xb, syncpoint 24) found in vi's data, at the same
+address before and after the applet (the applet's: layer 0x10, 0x800 away).
+Following it like the stream would: **600 presents in 10 s (60.0 fps),
+longest gap 19 ms, 300 frames read, 300 clean, 0 changed under the read**,
+slot read <= 3.3 ms; the same after the applet. The picture built from
+present-synced 64 KB reads is a perfect HOME-menu frame
+(`logs/v0714-probe7/png/capture-home1.png`).
+
+**v0.7.14-test1: the HOME menu streams** (config.ini `home_menu = 1`, arm
+token `homemenu`, off by default). `applet_mitm_uisource.cpp`: vi's shared
+buffer described as a 7-slot 1280x720 block-linear "swapchain"; a UI session
+attaches to vi (debug pump on), scans vi's data for present messages and a
+feeder thread (~1 ms) turns the live one into the same present records a
+game's queueBuffer makes (`RecordPresent`, factored out of BinderMitm) - slot
+plus fence, so the capture waits on the HOME menu's own syncpoint exactly as
+for games. Another layer coming to the front (an applet) is followed within
+~20 ms; nothing moving for 2 s rescans. RunLive runs a UI session whenever
+no game draws; a game's presents during it are only noted
+(`g_game_presented_in_ui`) and end it, as does a game's new buffer set; the
+1 s "stopped presenting" detach does not apply to UI sessions. No IPC hook
+in the HOME menu's or the applets' path at all (the probe's vi:s mitm is not
+used).
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

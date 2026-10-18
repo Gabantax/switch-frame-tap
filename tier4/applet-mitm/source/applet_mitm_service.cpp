@@ -112,6 +112,59 @@ namespace ams::mitm::applet {
         return ParseQueueBufferFence(p, sz, n, out, transform, crop);
     }
 
+    /* ---- the present records the capture reads (the game's queueBuffer,
+     * or v0.7.14's HOME-menu feeder) ------------------------------------- */
+    constinit std::atomic<bool> g_ui_session_active{false};
+    constinit std::atomic<bool> g_game_presented_in_ui{false};
+
+    void RecordPresent(s32 qs, bool have_fence, u32 fn, const u64 fv[4], u32 xf, const s32 crop[4]) {
+        static constinit os::SdkMutex s_record_lock;   /* the vi server threads and the UI feeder */
+        std::scoped_lock lk(s_record_lock);
+        g_queue_transform.store(xf, std::memory_order_relaxed);
+        {
+            const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
+            g_queue_crop_wh.store((cw > 0 && chh > 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
+            g_queue_crop_origin0.store(crop[0] == 0 && crop[1] == 0, std::memory_order_relaxed);
+            /* v0.7.9: this game's crop follows its mode (it has shown a
+             * whole 1920x1080 picture) - the size check trusts it */
+            if (cw >= 1920 && chh >= 1080) { g_crop_full_pid.store(g_app_pid.load(std::memory_order_relaxed), std::memory_order_relaxed); }
+        }
+        /* M89: seqlock - odd while slot, fence, tick and count change
+         * together, so the capture never pairs one present's slot with
+         * another's fence */
+        g_queue_seq.fetch_add(1, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_release);
+        if (qs >= 0 && qs < 8) { g_queue_slot.store(qs, std::memory_order_relaxed); }
+        if (have_fence) {
+            for (u32 k = 0; k < 4; ++k) { g_queue_fence[k].store(fv[k], std::memory_order_relaxed); }
+            g_queue_fence_n.store(fn, std::memory_order_relaxed);
+        } else {
+            g_queue_fence_n.store(0, std::memory_order_relaxed);
+        }
+        const u64 qtick = armGetSystemTick();
+        g_queue_tick.store(qtick, std::memory_order_relaxed);
+        {
+            /* M96: this present's record, complete before the count moves */
+            const u32 c = g_queue_count.load(std::memory_order_relaxed) + 1;
+            PresentRec &r = g_present_ring[c % PresentRingSize];
+            r.seq.fetch_add(1, std::memory_order_relaxed);
+            std::atomic_thread_fence(std::memory_order_release);
+            r.count.store(c, std::memory_order_relaxed);
+            r.slot.store((qs >= 0 && qs < 8) ? qs : -1, std::memory_order_relaxed);
+            r.fence_n.store(have_fence ? fn : 0, std::memory_order_relaxed);
+            for (u32 k = 0; k < 4; ++k) { r.fence[k].store(have_fence ? fv[k] : 0, std::memory_order_relaxed); }
+            r.tick.store(qtick, std::memory_order_relaxed);
+            r.transform.store(xf, std::memory_order_relaxed);
+            {
+                const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
+                r.crop.store((cw > 0 && chh > 0 && crop[0] == 0 && crop[1] == 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
+            }
+            r.seq.fetch_add(1, std::memory_order_release);
+        }
+        g_queue_count.fetch_add(1, std::memory_order_release);
+        g_queue_seq.fetch_add(1, std::memory_order_release);
+    }
+
     /* ---- IHOSBinderDriver: the frame pipeline -------------------------- */
 
     Result BinderMitm::TransactParcelAuto(s32 session_id, u32 code, u32 flags, const sf::InAutoSelectBuffer &parcel_in, const sf::OutAutoSelectBuffer &parcel_out) {
@@ -197,49 +250,13 @@ namespace ams::mitm::applet {
                             crop[0], crop[1], crop[2], crop[3]);
                 }
             }
-            g_queue_transform.store(xf, std::memory_order_relaxed);
-            {
-                const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
-                g_queue_crop_wh.store((cw > 0 && chh > 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
-                g_queue_crop_origin0.store(crop[0] == 0 && crop[1] == 0, std::memory_order_relaxed);
-                /* v0.7.9: this game's crop follows its mode (it has shown a
-                 * whole 1920x1080 picture) - the size check trusts it */
-                if (cw >= 1920 && chh >= 1080) { g_crop_full_pid.store(g_app_pid.load(std::memory_order_relaxed), std::memory_order_relaxed); }
-            }
-            /* M89: seqlock - odd while slot, fence, tick and count change
-             * together, so the capture never pairs one present's slot with
-             * another's fence */
-            g_queue_seq.fetch_add(1, std::memory_order_relaxed);
-            std::atomic_thread_fence(std::memory_order_release);
-            if (qs >= 0 && qs < 8) { g_queue_slot.store(qs, std::memory_order_relaxed); }
-            if (have_fence) {
-                for (u32 k = 0; k < 4; ++k) { g_queue_fence[k].store(fv[k], std::memory_order_relaxed); }
-                g_queue_fence_n.store(fn, std::memory_order_relaxed);
+            /* v0.7.14: while the HOME menu streams, a game's presents only
+             * say that the game is back (the UI session ends on that) */
+            if (g_ui_session_active.load(std::memory_order_relaxed)) {
+                g_game_presented_in_ui.store(true, std::memory_order_relaxed);
             } else {
-                g_queue_fence_n.store(0, std::memory_order_relaxed);
+                RecordPresent(qs, have_fence, fn, fv, xf, crop);
             }
-            const u64 qtick = armGetSystemTick();
-            g_queue_tick.store(qtick, std::memory_order_relaxed);
-            {
-                /* M96: this present's record, complete before the count moves */
-                const u32 c = g_queue_count.load(std::memory_order_relaxed) + 1;
-                PresentRec &r = g_present_ring[c % PresentRingSize];
-                r.seq.fetch_add(1, std::memory_order_relaxed);
-                std::atomic_thread_fence(std::memory_order_release);
-                r.count.store(c, std::memory_order_relaxed);
-                r.slot.store((qs >= 0 && qs < 8) ? qs : -1, std::memory_order_relaxed);
-                r.fence_n.store(have_fence ? fn : 0, std::memory_order_relaxed);
-                for (u32 k = 0; k < 4; ++k) { r.fence[k].store(have_fence ? fv[k] : 0, std::memory_order_relaxed); }
-                r.tick.store(qtick, std::memory_order_relaxed);
-                r.transform.store(xf, std::memory_order_relaxed);
-                {
-                    const s32 cw = crop[2] - crop[0], chh = crop[3] - crop[1];
-                    r.crop.store((cw > 0 && chh > 0 && crop[0] == 0 && crop[1] == 0) ? (static_cast<u32>(cw) << 16 | static_cast<u32>(chh)) : 0, std::memory_order_relaxed);
-                }
-                r.seq.fetch_add(1, std::memory_order_release);
-            }
-            g_queue_count.fetch_add(1, std::memory_order_release);
-            g_queue_seq.fetch_add(1, std::memory_order_release);
         }
 
         /* Fire on elapsed time, not transaction count. "total > 300" landed at

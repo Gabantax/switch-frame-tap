@@ -29,6 +29,7 @@
 #include "applet_mitm_uvc.hpp"
 #include "applet_mitm_net.hpp"
 #include "applet_mitm_uibinder.hpp"
+#include "applet_mitm_uisource.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -639,6 +640,7 @@ namespace ams {
             mitm::applet::g_nvab_armed = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "nvab");
             /* on unless config sets detach_on_home=0 (nodethome) */
             mitm::applet::g_detach_on_home = !mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "nodethome");
+            mitm::applet::g_ui_stream_armed = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "homemenu");
             g_screen_off.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "screenoff"), std::memory_order_relaxed);
             mitm::applet::g_early_collect = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyoff") ? 0
                                           : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyab") ? 2 : 1;
@@ -1086,7 +1088,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14-probe7: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.14-test1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1128,6 +1130,7 @@ namespace ams {
         mitm::applet::g_nvab_armed    = ArmFileContains("nvab");
         mitm::applet::g_live_armed    = ArmFileContains("live");
         mitm::applet::g_detach_on_home = !ArmFileContains("nodethome");
+        mitm::applet::g_ui_stream_armed = ArmFileContains("homemenu");   /* v0.7.14: the HOME menu streams too */
         g_screen_off.store(ArmFileContains("screenoff"), std::memory_order_relaxed);
         mitm::applet::g_early_collect = ArmFileContains("earlyoff") ? 0 : ArmFileContains("earlyab") ? 2 : 1;
         mitm::applet::g_nv1080_armed  = ArmFileContains("nv1080");

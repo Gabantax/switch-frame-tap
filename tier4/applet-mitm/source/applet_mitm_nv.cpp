@@ -32,6 +32,7 @@
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_dmdbg.hpp"
+#include "applet_mitm_uisource.hpp"
 #include "vic40_config.hpp"
 #include "nvenc_drv_h264.h"
 #include "applet_mitm_nvjpg.hpp"
@@ -1588,6 +1589,8 @@ namespace ams::mitm::applet {
                     UsbFollowStreamSwitch();
                     if (ShotRequestPending()) { break; }
                     if (UsbViewerPresent(300)) {
+                        /* v0.7.14: the HOME menu streams too (home_menu = 1) */
+                        if (g_ui_stream_armed) { break; }
                         const u32 q0 = g_queue_count.load(std::memory_order_relaxed);
                         os::SleepThread(TimeSpan::FromMilliSeconds(250));
                         if (g_queue_count.load(std::memory_order_relaxed) != q0) { break; }
@@ -2763,6 +2766,61 @@ namespace ams::mitm::applet {
             return FindSwapchainBySize(dbg, want, base);
         }
 
+        /* v0.7.14: the HOME menu or an applet, read out of vi (applet_mitm_uisource.hpp).
+         * false: nothing was streamed (no shared buffer, no memory, no attach) */
+        bool RunUiSession(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 &sessions) {
+            u64 vpid = 0, base = 0;
+            GameSurface ug = {};
+            if (!UiSourceFind(std::addressof(vpid), std::addressof(base), std::addressof(ug))) {
+                static bool said = false;
+                if (!said) { LogLine("   live-ui: vi's shared buffer not found - the HOME menu is not streamed"); said = true; }
+                return false;
+            }
+            if (!CaptureAcquire("live-ui")) {
+                VicStage("live-ui:no_memory");
+                SetViewerReason(ViewerReason_NoMemory);
+                os::SleepThread(TimeSpan::FromSeconds(2));
+                return false;
+            }
+            SetViewerReason(ViewerReason_Starting);
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            const u64 f0 = armTicksToNs(armGetSystemTick());
+            if (const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), vpid); R_FAILED(ra)) {
+                LogLine("   live-ui: attach to vi rc=0x%x", ra.GetValue());
+                os::SleepThread(TimeSpan::FromSeconds(5));
+                return false;
+            }
+            u32 nev = 0;
+            const Result rr = DbgResume(dbg, std::addressof(nev));
+            const u64 held_us = (armTicksToNs(armGetSystemTick()) - f0) / 1000;
+            if (R_FAILED(rr)) { DbgDetach(dbg); os::SleepThread(TimeSpan::FromSeconds(2)); return false; }
+            DebugPumpStart(dbg);
+            ++sessions;
+            g_live_sessions.store(sessions, std::memory_order_relaxed);
+            LogLine("   live[%u]: the HOME menu / applets - attached to vi (pid %llu), held %llu us, %u attach events", sessions,
+                    static_cast<unsigned long long>(vpid), static_cast<unsigned long long>(held_us), nev);
+            g_game_presented_in_ui.store(false, std::memory_order_relaxed);
+            g_ui_session_active.store(true, std::memory_order_relaxed);
+            StreamEnd end = StreamEnd::Failed;
+            if (UiSourceStart(dbg, vpid, base)) {
+                g_reconfig_request.store(false, std::memory_order_relaxed);
+                end = g_uvc_raw ? TryUvcRawStream(dbg, base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, std::addressof(ug))
+                                : TryNvencStream(dbg, base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true, std::addressof(ug));
+            }
+            UiSourceStop();
+            g_ui_session_active.store(false, std::memory_order_relaxed);
+            DebugPumpStop();
+            DbgDetach(dbg);
+            UiSourceLogStats("live-ui");
+            g_live_fps_x10.store(0, std::memory_order_relaxed);
+            g_live_game_fps_x10.store(0, std::memory_order_relaxed);
+            static const char *const names[] = { "done", "a game is on screen", "the viewer went away", "NVENC stalled", "failed",
+                                                 "restarting (new settings or a game's new buffers)", "turned off from the overlay" };
+            LogLine("   live[%u]: HOME-menu session ended - %s; detached from vi", sessions, names[static_cast<int>(end)]);
+            if (end == StreamEnd::Failed) { os::SleepThread(TimeSpan::FromSeconds(5)); }
+            return true;
+        }
+
         void RunLive(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr) {
             LogLine("   ==== LIVE MODE (M86): streaming whenever a viewer is reading and a game is running ====");
             /* M98: a release install captures only on the firmware it was
@@ -2850,6 +2908,11 @@ namespace ams::mitm::applet {
                     continue;
                 }
                 if (!have_app || pid.value == skip_pid || !presenting) {
+                    /* v0.7.14: the HOME menu or an applet instead (home_menu = 1) */
+                    if (g_ui_stream_armed && RunUiSession(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, sessions)) {
+                        said_wait_game = false;
+                        continue;
+                    }
                     g_live_state.store(LiveState_WaitGame, std::memory_order_relaxed);
                     SetViewerReason(!have_app ? ViewerReason_NoGame : (pid.value == skip_pid ? ViewerReason_NotFound : ViewerReason_GameHidden));
                     /* v0.7.11: not drawing (HOME menu) or no game: the donor's
@@ -6429,7 +6492,8 @@ namespace ams::mitm::applet {
                 if (!g_stream_enabled.load(std::memory_order_relaxed)) { why = "turned off from the overlay"; end = StreamEnd::Disabled; break; }
                 if (g_reconfig_request.exchange(false, std::memory_order_relaxed)) { why = "new settings from the manager app"; end = StreamEnd::Reconfigure; break; }
                 if (g_app_excluded.load(std::memory_order_relaxed)) { why = "this app was excluded"; end = StreamEnd::Disabled; break; }
-                if (g_detach_on_home) {
+                if (g_ui_session_active.load(std::memory_order_relaxed) && g_game_presented_in_ui.load(std::memory_order_relaxed)) { why = "a game is on screen"; end = StreamEnd::GameGone; break; }   /* v0.7.14 */
+                if (g_detach_on_home && !g_ui_session_active.load(std::memory_order_relaxed)) {
                     const u64 qt = g_queue_tick.load(std::memory_order_relaxed);
                     if (qt != 0) {
                         const u64 age_ns = armTicksToNs(armGetSystemTick() - qt);
@@ -6877,7 +6941,11 @@ namespace ams::mitm::applet {
                 /* exp/detach-on-home: game stopped presenting (HOME / SwitchU).
                  * End the session so we are not holding a debug attach through
                  * the Album/vi handoff; RunLive reattaches on the next present. */
-                if (live && g_detach_on_home) {
+                /* v0.7.14: streaming the HOME menu and a game comes to the front */
+                if (live && g_ui_session_active.load(std::memory_order_relaxed) && g_game_presented_in_ui.load(std::memory_order_relaxed)) {
+                    why = "a game is on screen"; end = StreamEnd::GameGone; break;
+                }
+                if (live && g_detach_on_home && !g_ui_session_active.load(std::memory_order_relaxed)) {
                     const u64 qt = g_queue_tick.load(std::memory_order_relaxed);
                     if (qt != 0) {
                         const u64 age_ns = armTicksToNs(armGetSystemTick() - qt);

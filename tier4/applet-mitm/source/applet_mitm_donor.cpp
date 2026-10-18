@@ -2,6 +2,7 @@
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_service.hpp"
+#include "applet_mitm_nv.hpp"
 #include "applet_mitm_uisource.hpp"
 
 namespace ams::mitm::applet {
@@ -69,7 +70,13 @@ namespace ams::mitm::applet {
          * Only a web applet, or a pool within 48 MB of full, stops it. A
          * game's session keeps the earlier rule. */
         bool HomeMenuRules() {
-            return g_ui_session_active.load(std::memory_order_relaxed) || (g_ui_stream_armed && g_app_pid.load(std::memory_order_relaxed) == 0);
+            if (!g_ui_stream_armed) { return false; }
+            if (g_ui_session_active.load(std::memory_order_relaxed) || g_app_pid.load(std::memory_order_relaxed) == 0) { return true; }
+            /* v0.7.14 test8: a game that is not on screen (HOME, the Album or
+             * hbmenu in front of it) - test7: the Album over a suspended game
+             * stopped the stream at 363 of 500 MB under the game's rule */
+            const u64 t = g_app_present_tick.load(std::memory_order_relaxed);
+            return t == 0 || armTicksToNs(armGetSystemTick() - t) >= UINT64_C(1000000000);
         }
         constexpr u64 TightMb = 48;
         /* v0.7.14: the smallest donor that streams 720p (capture region

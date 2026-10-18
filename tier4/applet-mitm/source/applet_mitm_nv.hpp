@@ -53,6 +53,9 @@ namespace ams::mitm::applet {
      * the process whose present was recorded last */
     extern std::atomic<u64> g_applet_target_pid;
     extern std::atomic<u64> g_present_pid;
+    /* the system tick of the application's last present, recorded or not
+     * (a UI session only notes them) - "the game is on screen" */
+    extern std::atomic<u64> g_app_present_tick;
     inline bool IsAlbumProgram(u64 tid) { return tid == UINT64_C(0x010000000000100D); }
 
     /* Opt-in gates, parsed once at startup from sdmc:/applet-mitm.armed:

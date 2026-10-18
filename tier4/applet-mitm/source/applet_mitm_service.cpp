@@ -265,6 +265,7 @@ namespace ams::mitm::applet {
             /* v0.7.14: while the HOME menu streams, a game's presents only
              * say that the game is back (the UI session ends on that) */
             if (album) { g_applet_target_pid.store(ci.process_id.value, std::memory_order_relaxed); }
+            else if (ci.process_id.value == g_app_pid.load(std::memory_order_relaxed)) { g_app_present_tick.store(armGetSystemTick(), std::memory_order_relaxed); }
             if (g_ui_session_active.load(std::memory_order_relaxed)) {
                 g_game_presented_in_ui.store(true, std::memory_order_relaxed);
             } else {

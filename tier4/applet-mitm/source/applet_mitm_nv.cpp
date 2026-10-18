@@ -62,6 +62,7 @@ namespace ams::mitm::applet {
     constinit GameSurface g_applet_surface = {};   /* v0.7.14 */
     constinit std::atomic<u64> g_applet_target_pid{0};
     constinit std::atomic<u64> g_present_pid{0};
+    constinit std::atomic<u64> g_app_present_tick{0};
     /* the record a running session's geometry came from: a new buffer set
      * there restarts it (the game's, or v0.7.14 the Album's / hbmenu's) */
     constinit const GameSurface *g_session_surface = &g_game_surface;

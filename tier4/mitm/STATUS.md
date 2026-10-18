@@ -420,6 +420,15 @@ and attaches to whichever process presented - the game, or the Album in
 front of a suspended one; a session restarts on a new buffer set in its own
 record (g_session_surface).
 
+**test7 run (`logs/v0714-test7`, recorded):** "all works" - hbmenu, a
+homebrew app inside it, the real Album, and HOME -> Album -> back to the
+game. One pause: with a game suspended, opening the Album stopped the stream
+until it closed - the game's memory rule ("others above 160 MB") applied
+because a game process existed; the pool was at 363 of 500 MB (137 free).
+**test8:** the HOME-menu memory rule also applies while the game is not on
+screen - its last present (g_app_present_tick, noted even during a UI
+session) 1 s or more ago; with the game in front, the old rule as before.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

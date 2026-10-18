@@ -434,9 +434,49 @@ suspended game streamed with no pause (live[5] at 142 s); a game's manual
 (applet 0x17) still stopped the stream first (am: PrepareForApplet), and
 System Settings still re-set up on a capped donor. No errors.
 
-**Open now:** sound outside games; release prep (manager toggle, notes,
-trimming the probe-only code behind probe-ui.txt); a v0.7.13.1 with the
-address-0 fix.
+**Release prep (v0.7.14-beta1, built, not published):** a manager row
+"HOME menu (beta)", read at boot (status reserved3 bit 4); the research
+probe compiled out (SFT_UI_PROBE); the dispdrv server at 4 sessions and 2
+threads. Module image 1816 KB (v0.7.13.1: 1664, test8: 2228). Every
+"Album" in these logs was hbmenu (0x100D under hbl, vi:m) - the real
+Album's dispdrv path has never run. v0.7.13.1-test1 (v0.7.13 + the
+address-0 guard + the Windows DPI fix) is a published pre-release.
+
+**Sound outside games.** grc:d records the running game only.
+- sound1: stopped the console - the probe logged volumes with %.2f, and a
+  stratosphere module has no newlib heap (dtoa's Balloc asserts inside
+  LogLine, under the log lock); no crash report was written.
+- sound2 (`logs/v0714-sound2`): audrec:u's final output recorder opens
+  (48 kHz, 2 ch, s16) and delivers buffers at the real rate, but **exact
+  zeros on the HOME menu** - with qlaunch's record and master volumes
+  (aud:a 8 and 4, aruid = pid) both at 1000/1000. With a game: the game's
+  sound, and am has set qlaunch's record and master volumes to 0. Raising
+  qlaunch's record volume (aud:a 9: float, pad, aruid, fade - layout 0
+  works) changes nothing. The recorder taps the application mix only, as
+  nx-btred reports.
+- sound3 (`logs/v0714-sound3`): the audio sysmodule (0100000000000014,
+  debug-attached, 19 attach events, resumed in 21-255 us) has 5.4 MB
+  readable: a 4 MB device-shared, uncached .bss block (the ADSP's shared
+  memory) and three Io ranges (4, 64, 256 KB - APE registers / ARAM). The
+  pages that keep changing are all inside the 4 MB block and hold command
+  lists and status (one names "MainAudioOut"; records of 5000), not PCM:
+  no buffer behaves like an output ring, on the HOME menu or in a game.
+  The mixing happens inside the ADSP; its output (ADMA -> AHUB -> I2S in
+  handheld) is not in memory the CPU side maps.
+- Left: map the APE's memory (ARAM, the ADMA channel registers) through an
+  Io mapping of our own - hardware-level, a bus hang if the APE is gated;
+  or docked HDMI, where HDA's DMA reads system memory.
+
+**Viewer audio chop (2026-10-18), not the console:** the console sent full
+sound and a recording of it is clean; the viewer's live playback hit 4-5
+underruns and resyncs a second (journalctl, the viewer's stats lines). The
+PC had run out of memory at 09:47 (OOM kills, PulseAudio's ALSA warning),
+and since then PulseAudio drives the speaker sink at 326 ms latency with
+85 ms fragments, which empties the viewer's 40 ms cushion in big bites;
+restarting the viewer did not reset it. The viewer should cope with a
+device that pulls in large chunks (Bluetooth headsets do too).
+
+**Open now:** publishing the beta; sound outside games (above).
 
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is

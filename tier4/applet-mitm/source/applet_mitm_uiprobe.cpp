@@ -867,6 +867,192 @@ namespace ams::mitm::applet {
             }
         }
 
+        /* ---- probe7: the HOME menu's presents, read out of vi's IPC buffers
+         * probe6: the "word" is the slot argument of the last
+         * PresentSharedFrameBuffer (8255) request still in one of vi's IPC
+         * message buffers - "SFCI", command 0x203f, then the arguments:
+         * fence (count, {id, value} x4) at -0x48, crop -0x24, transform
+         * -0x14, swap interval -0x10, layer -0x08, slot +0. The HOME menu's
+         * is another buffer (0x400 lower). So every frame the HOME menu
+         * presents shows up there with its fence. A present of slot B means
+         * slot A is finished and on screen until B is shown (the HOME menu
+         * cannot draw into A before the display lets go of it). */
+        struct PresentMsg { u64 va; u32 fence_id, fence_value; u64 layer; u64 slot; };
+
+        bool ParsePresentAt(const u8 *p, PresentMsg *m) {   /* p = the slot word */
+            u32 cnt, id, val, swap, pad, slot_hi, layer_hi;
+            u64 layer, slot;
+            std::memcpy(std::addressof(cnt), p - 0x48, 4);
+            std::memcpy(std::addressof(id), p - 0x44, 4);
+            std::memcpy(std::addressof(val), p - 0x40, 4);
+            std::memcpy(std::addressof(swap), p - 0x10, 4);
+            std::memcpy(std::addressof(pad), p - 0x0C, 4);
+            std::memcpy(std::addressof(layer), p - 0x08, 8);
+            std::memcpy(std::addressof(slot), p, 8);
+            slot_hi = static_cast<u32>(slot >> 32);
+            layer_hi = static_cast<u32>(layer >> 32);
+            if (cnt < 1 || cnt > 4 || id >= 192 || swap > 4 || pad != 0 || layer_hi != 0 || slot_hi != 0) { return false; }
+            if (layer == 0 || layer >= 0x1000 || slot >= 7) { return false; }
+            m->fence_id = id;
+            m->fence_value = val;
+            m->layer = layer;
+            m->slot = slot;
+            return true;
+        }
+
+        constexpr u32 MaxMsgs = 16;
+        constinit PresentMsg g_msgs[MaxMsgs] = {};
+        constinit u32 g_nmsgs = 0;
+
+        /* every present-shaped message in vi's data; live = its fence moved in 40 ms */
+        u32 ScanPresents(::ams::svc::Handle dbg, const char *tag) {
+            g_nmsgs = 0;
+            u32 shaped = 0;
+            for (u32 r = 0; r < g_nregs; ++r) {
+                for (u64 off = 0; off < g_regs[r].size; off += SnapChunk) {
+                    const size_t len = static_cast<size_t>(std::min<u64>(SnapChunk, g_regs[r].size - off));
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, g_regs[r].addr + off, len))) { continue; }
+                    for (size_t i = 0x48; i + 8 <= len; i += 4) {
+                        PresentMsg m;
+                        if (!ParsePresentAt(g_snap_buf + i, std::addressof(m))) { continue; }
+                        ++shaped;
+                        if (g_nmsgs < MaxMsgs) { m.va = g_regs[r].addr + off + i; g_msgs[g_nmsgs++] = m; }
+                    }
+                }
+                static_cast<void>(DrainContinue(dbg));
+            }
+            os::SleepThread(TimeSpan::FromMilliSeconds(40));
+            u32 live = 0;
+            LogLine("uiprobe: presents (%s): %u present-shaped messages in vi's data", tag, shaped);
+            for (u32 k = 0; k < g_nmsgs; ++k) {
+                u8 buf[0x50];
+                PresentMsg now = {};
+                const bool ok = R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(buf), dbg, g_msgs[k].va - 0x48, sizeof(buf))) && ParsePresentAt(buf + 0x48, std::addressof(now));
+                const bool moved = ok && now.fence_value != g_msgs[k].fence_value;
+                live += moved;
+                u32 hdr[4] = {};
+                static_cast<void>(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(hdr), dbg, g_msgs[k].va - 0x58, sizeof(hdr)));
+                LogLine("   %#llx: layer %#llx slot %llu, fence %u: %u -> %u%s; header %08x cmd %u",
+                        static_cast<unsigned long long>(g_msgs[k].va), static_cast<unsigned long long>(g_msgs[k].layer), static_cast<unsigned long long>(g_msgs[k].slot),
+                        g_msgs[k].fence_id, g_msgs[k].fence_value, ok ? now.fence_value : 0, moved ? " LIVE" : "", hdr[0], hdr[2]);
+                if (moved) { const u64 keep = g_msgs[k].va; g_msgs[k] = now; g_msgs[k].va = keep; }
+                if (!moved) { g_msgs[k].fence_value = 0xFFFFFFFFu; }   /* not live */
+            }
+            return live;
+        }
+
+        void ScanPresentsAttached(const char *tag) {
+            u64 pid = 0, base = 0, size = 0;
+            if (!FindViBuffer(std::addressof(pid), std::addressof(base), std::addressof(size))) { return; }
+            FindViRegions(pid, base);
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (R_FAILED(::ams::svc::DebugActiveProcess(std::addressof(dbg), pid))) { return; }
+            static_cast<void>(DrainContinue(dbg));
+            static_cast<void>(ScanPresents(dbg, tag));
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+        }
+
+        /* the capture loop the stream would run, on the HOME menu, 10 s */
+        void HomeCapture(const char *tag) {
+            u64 pid = 0, base = 0, size = 0;
+            if (!FindViBuffer(std::addressof(pid), std::addressof(base), std::addressof(size))) { return; }
+            FindViRegions(pid, base);
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid); R_FAILED(ra)) { LogLine("uiprobe: capture: attach rc=0x%x", ra.GetValue()); return; }
+            static_cast<void>(DrainContinue(dbg));
+            const u32 live = ScanPresents(dbg, tag);
+            u32 pick = MaxMsgs;
+            for (u32 k = 0; k < g_nmsgs; ++k) { if (g_msgs[k].fence_value != 0xFFFFFFFFu) { pick = k; break; } }
+            if (live == 0 || pick == MaxMsgs) { LogLine("uiprobe: capture: no live present message - the HOME menu's presents were not found"); static_cast<void>(::ams::svc::CloseHandle(dbg)); return; }
+            const u64 va = g_msgs[pick].va;
+            LogLine("uiprobe: capture: following %#llx (layer %#llx, syncpoint %u) for 10 s", static_cast<unsigned long long>(va),
+                    static_cast<unsigned long long>(g_msgs[pick].layer), g_msgs[pick].fence_id);
+            auto read_msg = [&](PresentMsg *m) {
+                u8 buf[0x50];
+                return R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(buf), dbg, va - 0x48, sizeof(buf))) && ParsePresentAt(buf + 0x48, m);
+            };
+            auto slot_hash = [&](u32 s) {
+                u64 h = 0;
+                for (size_t off = 0; off < ViSlotSize; off += SnapChunk) {
+                    if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, base + s * ViSlotSize + off, SnapChunk))) { h ^= Hash(g_snap_buf, SnapChunk) + off; }
+                }
+                return h;
+            };
+            PresentMsg last = {};
+            static_cast<void>(read_msg(std::addressof(last)));
+            const u32 fence_first = last.fence_value;
+            const u64 t0 = armTicksToNs(armGetSystemTick());
+            u32 presents = 0, frames = 0, clean = 0, torn = 0, same_slot = 0, polls = 0, skipped = 0;
+            u64 read_max = 0, gap_max = 0, last_t = t0;
+            while (armTicksToNs(armGetSystemTick()) - t0 < UINT64_C(10000000000)) {
+                PresentMsg m;
+                ++polls;
+                if (!read_msg(std::addressof(m)) || m.fence_value == last.fence_value) {
+                    os::SleepThread(TimeSpan::FromMicroSeconds(700));
+                    if ((polls & 63) == 0) { static_cast<void>(DrainContinue(dbg)); }
+                    continue;
+                }
+                const u64 t = armTicksToNs(armGetSystemTick());
+                if (presents != 0 && t - last_t > gap_max) { gap_max = t - last_t; }
+                last_t = t;
+                ++presents;
+                if (m.slot == last.slot) { ++same_slot; last = m; continue; }
+                const u32 finished = static_cast<u32>(last.slot);
+                last = m;
+                if ((presents & 1) == 0) { ++skipped; continue; }   /* every other frame: room to poll between reads */
+                /* read the finished slot whole (what the stream would hand to the VIC), then check it did not move */
+                const u64 r0 = armTicksToNs(armGetSystemTick());
+                const u64 h1 = slot_hash(finished);
+                const u64 h2 = slot_hash(finished);
+                const u64 rt = (armTicksToNs(armGetSystemTick()) - r0) / 2;
+                if (rt > read_max) { read_max = rt; }
+                ++frames;
+                if (h1 == h2) { ++clean; } else { ++torn; }
+            }
+            LogLine("uiprobe: capture (%s): %u presents seen in 10 s (fence %u -> %u), longest gap %llu ms, %u named the same slot twice; %u frames read, %u clean, %u changed under the read; slot read %llu us at most; %u polls",
+                    tag, presents, fence_first, last.fence_value, static_cast<unsigned long long>(gap_max / 1000000), same_slot, frames, clean, torn,
+                    static_cast<unsigned long long>(read_max / 1000), polls);
+            AMS_UNUSED(skipped);
+
+            /* one clean picture: each 64 KB piece read right after a present, from the slot just finished */
+            static_cast<void>(fs::CreateDirectory("sdmc:/config/switch-frame-tap/probe"));
+            char path[96];
+            std::snprintf(path, sizeof(path), "sdmc:/config/switch-frame-tap/probe/capture-%s.raw", tag[0] == 'h' && tag[5] == 'a' ? "home2" : "home1");
+            static_cast<void>(fs::DeleteFile(path));
+            u32 pieces = 0, mixed = 0;
+            if (R_SUCCEEDED(fs::CreateFile(path, static_cast<s64>(ViSlotSize)))) {
+                fs::FileHandle f;
+                if (R_SUCCEEDED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write))) {
+                    s32 first_slot = -1;
+                    for (size_t off = 0; off < ViSlotSize; off += SnapChunk) {
+                        /* wait for a present that leaves the same slot finished as the first piece's */
+                        for (u32 guard = 0; guard < 400; ++guard) {
+                            PresentMsg m;
+                            if (read_msg(std::addressof(m)) && m.fence_value != last.fence_value) {
+                                const s32 fin = static_cast<s32>(last.slot);
+                                last = m;
+                                if (m.slot != static_cast<u64>(fin) && (first_slot < 0 || fin == first_slot)) {
+                                    if (first_slot < 0) { first_slot = fin; }
+                                    break;
+                                }
+                            }
+                            os::SleepThread(TimeSpan::FromMicroSeconds(500));
+                        }
+                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, base + static_cast<u32>(first_slot < 0 ? 3 : first_slot) * ViSlotSize + off, SnapChunk))) { ++mixed; }
+                        PresentMsg after;
+                        if (read_msg(std::addressof(after)) && after.fence_value != last.fence_value) { ++mixed; }   /* a present landed during the read */
+                        static_cast<void>(fs::WriteFile(f, static_cast<s64>(off), g_snap_buf, SnapChunk, fs::WriteOption::None));
+                        ++pieces;
+                        static_cast<void>(DrainContinue(dbg));
+                    }
+                    static_cast<void>(fs::FlushFile(f));
+                    fs::CloseFile(f);
+                }
+            }
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+            LogLine("uiprobe: capture: picture %s (%u pieces, %u with a present landing mid-read); detached", path, pieces, mixed);
+        }
+
         /* the HOME menu alone, 75 s in; a library applet 4 s after it opened */
         void SnapSteps(u64 now, const Proc *cur, u32 cn) {
             u64 lib = 0;
@@ -878,7 +1064,7 @@ namespace ams::mitm::applet {
             if (!g_snap_home_done && lib == 0 && !app && now >= UINT64_C(75000000000)) {
                 g_snap_home_done = true;
                 SnapVi("home");
-                FlipSearch("home");
+                HomeCapture("home");
                 if (HasWord("layers")) { LayerStructs("home", false); }
             }
             if (lib != g_applet_tid) { g_applet_tid = lib; g_applet_since_ns = now; }
@@ -887,18 +1073,16 @@ namespace ams::mitm::applet {
                 const char *nm = AppletName(lib);
                 LogLine("uiprobe: %s has been open 4 s (%u shared-layer presents seen so far)", nm != nullptr ? nm : "an applet", g_shared_present.count.load());
                 SnapVi("applet");
-                Correlate();
-                FlipSearch("applet");
-                DumpAroundAppletWord("applet");
+                ScanPresentsAttached("applet");
+                if (HasWord("corr")) { Correlate(); FlipSearch("applet"); DumpAroundAppletWord("applet"); }
+                if (HasWord("verify")) { VerifyOnHome(); }   /* probe5's check, kept for reference */
             }
             /* the survivors checked on the HOME menu, 3 s after it is alone again */
             const bool home_alone = lib == 0 && !app;
             if (!home_alone) { g_home_alone_since = 0; } else if (g_home_alone_since == 0) { g_home_alone_since = now; }
             if (g_snap_applet_done && !g_verify_done && home_alone && now - g_home_alone_since >= UINT64_C(3000000000)) {
                 g_verify_done = true;
-                FlipSearch("home again");
-                DumpAroundAppletWord("home again");
-                VerifyOnHome();
+                HomeCapture("home again");
             }
         }
 

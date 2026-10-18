@@ -266,6 +266,27 @@ against which of slots 3/4 is being drawn (hash twice) - "= the slot being
 drawn" or "= the finished one". Same search with the applet open (it must find
 the applet's known word - a check of the method) and 1 KB around that word.
 
+**probe6 run (`logs/v0714-probe6`, measured):** the flip search found the
+applet's word again with no hint (5848 KB region +0x1760e8) - **"= the slot
+being drawn" 23, "= the finished one" 1**: it is the last *presented* slot,
+which the GPU is usually still finishing; the finished frame is the other
+slot. On the HOME menu a word **0x400 lower (+0x175ce8)** flipped 33/39.
+The 1 KB around the applet's word explains it: these are **vi's IPC message
+buffers**, and the word is the slot argument of the last
+PresentSharedFrameBuffer request still in one - "SFCI", command 0x203f
+(8255), fence {1, syncpoint 26, 0x704}, swap 1, layer 0x10, slot. The HOME
+menu's presents land in another buffer, so each HOME-menu frame's slot *and
+fence* can be read out of vi.
+
+**probe7 (v0.7.14-probe7):** the capture loop the stream would run, 10 s on
+the HOME menu: present-shaped messages found in vi's data (fence count 1-4,
+syncpoint < 192, swap <= 4, layer < 0x1000, slot < 7), the live one (fence
+moves) followed by polling ~1 ms; on each present of slot B, slot A is read
+(finished: the HOME menu cannot draw into A before the display lets go of it)
+and hashed twice - clean or changed under the read; plus one picture built
+from 64 KB pieces each read right after a present
+(`probe/capture-home1.raw`, `capture-home2.raw` after the applet).
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

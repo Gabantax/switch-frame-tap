@@ -55,7 +55,7 @@ jobs:
           SFT_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.SFT_ANDROID_KEYSTORE_PASSWORD }}
           SFT_ANDROID_KEY_ALIAS: ${{ secrets.SFT_ANDROID_KEY_ALIAS }}
           SFT_ANDROID_KEY_PASSWORD: ${{ secrets.SFT_ANDROID_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon protocolTest playbackTest assembleRelease -PsftVersion=${{ steps.v.outputs.version }} -PsftVersionCode=${{ steps.v.outputs.code }}
+        run: chmod +x gradlew && ./gradlew --no-daemon protocolTest playbackTest assembleRelease -PsftVersion=${{ steps.v.outputs.version }} -PsftVersionCode=${{ steps.v.outputs.code }}
       - name: Name the APK
         run: |
           mkdir -p dist

@@ -17,7 +17,9 @@ latency are still being reported, so please tell us how it does on yours.
    the TV, TV box or phone, and open it with a file manager that can install APKs.
    Allow installation from that file manager when Android asks. The app appears as
    **Switch Frame Tap**. (Coming from the 0.1.x preview APK: uninstall it first, it
-   was signed with a different key.)
+   was signed with a different key.) Release APKs are signed with the key whose
+   SHA-256 certificate fingerprint is
+   `07:4B:E6:96:07:FD:85:5B:C7:5D:84:FA:25:05:C2:25:3B:4C:78:62:30:A7:5E:32:27:C8:14:50:A0:FE:8B:B6`.
 2. In the Switch Frame Tap app on the console, set Connection to match (USB - PC
    viewer, or Network) and restart the console if it asks. Close the PC viewer:
    the console serves one viewer at a time.

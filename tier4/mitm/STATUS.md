@@ -311,6 +311,20 @@ no game draws; a game's presents during it are only noted
 in the HOME menu's or the applets' path at all (the probe's vi:s mitm is not
 used).
 
+**test1 run (`logs/v0714-test1`, user's recording in ~/Videos/Switch Frame
+Tap/switch_2026-10-18_00-59-*.mp4):** the viewer showed the HOME menu's
+*background* (wallpaper, no tiles) and the dark backdrop - the capture slots
+0-2, not slots 3/4. The first UI session did follow the HOME menu (layer 0xd,
+syncpoint 25, at the 5848 KB region +0x175ce8 = probe6's offset) for ~9 s,
+then switched to words that only looked like presents (layer 0x11 syncpoint
+127, layer 0x8e syncpoint 0) and fed their "slots"; the session after the
+controller applet (which stopped the stream: Applet group 454 MB with our
+41) found no live message - the applet's was past the 16-message cap (20
+shaped). **test2:** a message counts only with its CMIF header ("SFCI" +
+8255, or "SFCO" + 0 once vi answered), syncpoint != 0; 64 messages; fast
+rescans only in a session's first 3 s, the followed message kept across
+rescans; every 5 s the layer fed and its slot histogram.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

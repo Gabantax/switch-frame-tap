@@ -17,7 +17,13 @@ namespace ams::mitm::applet {
 
         /* PresentSharedFrameBuffer's arguments around the slot word (probe6):
          * fence {count, {id, value} x4} at -0x48, crop -0x24, transform
-         * -0x14, swap interval -0x10, pad -0x0C, layer -0x08, slot +0 */
+         * -0x14, swap interval -0x10, pad -0x0C, layer -0x08, slot +0; the
+         * CMIF header before them: "SFCI" at -0x58, command 8255 at -0x50 -
+         * or, once vi has answered in the same buffer, "SFCO" and result 0
+         * (the arguments stay). test1: without the header check, words that
+         * only looked like a present (syncpoint 0 or 127) were followed and
+         * the capture buffers (slots 0-2) streamed. */
+        constexpr u32 MagicSfci = 0x49434653, MagicSfco = 0x4f434653;
         struct Msg {
             u64 va;
             u64 layer;
@@ -27,8 +33,11 @@ namespace ams::mitm::applet {
         };
 
         bool ParseAt(const u8 *p, Msg *m) {
-            u32 cnt, id, val, swap, pad;
+            u32 cnt, id, val, swap, pad, magic, cmd;
             u64 layer, slot;
+            std::memcpy(std::addressof(magic), p - 0x58, 4);
+            std::memcpy(std::addressof(cmd), p - 0x50, 4);
+            if (!((magic == MagicSfci && cmd == 8255) || (magic == MagicSfco && cmd == 0))) { return false; }
             std::memcpy(std::addressof(cnt), p - 0x48, 4);
             std::memcpy(std::addressof(id), p - 0x44, 4);
             std::memcpy(std::addressof(val), p - 0x40, 4);
@@ -36,7 +45,7 @@ namespace ams::mitm::applet {
             std::memcpy(std::addressof(pad), p - 0x0C, 4);
             std::memcpy(std::addressof(layer), p - 0x08, 8);
             std::memcpy(std::addressof(slot), p, 8);
-            if (cnt < 1 || cnt > 4 || id >= 192 || swap > 4 || pad != 0) { return false; }
+            if (cnt < 1 || cnt > 4 || id == 0 || id >= 192 || swap > 4 || pad != 0) { return false; }
             if (layer == 0 || layer >= 0x1000 || slot >= NumSlots) { return false; }
             m->layer = layer;
             m->fence_id = id;
@@ -45,7 +54,7 @@ namespace ams::mitm::applet {
             return true;
         }
 
-        constexpr u32 MaxMsgs = 16;
+        constexpr u32 MaxMsgs = 64;
         constexpr u32 MaxRegs = 48;
         constexpr size_t Chunk = 16 * 1024;
 
@@ -58,9 +67,12 @@ namespace ams::mitm::applet {
         constinit Msg g_msgs[MaxMsgs] = {};
         constinit u32 g_nmsgs = 0;
         constinit s32 g_active = -1;
-        alignas(0x10) constinit u8 g_chunk[Chunk + 0x50] = {};
+        alignas(0x10) constinit u8 g_chunk[Chunk + 0x60] = {};
 
         constinit u32 g_fed = 0, g_switches = 0, g_rescans = 0, g_shaped = 0;
+        /* test2: per 5 s window, the layer fed and the slots its frames named */
+        constinit u32 g_win_fed = 0, g_win_slots[8] = {};
+        constinit u64 g_win_layer = 0;
 
         alignas(os::ThreadStackAlignment) constinit u8 g_feed_stack[12_KB];
         constinit os::ThreadType g_feed_thread;
@@ -93,30 +105,36 @@ namespace ams::mitm::applet {
         /* every present-shaped message in vi's data */
         void Scan() {
             ++g_rescans;
+            const u64 keep = g_active >= 0 ? g_msgs[g_active].va : 0;   /* the followed one stays followed */
             g_nmsgs = 0;
             g_active = -1;
             g_shaped = 0;
             for (u32 r = 0; r < g_nregs; ++r) {
-                /* each chunk read with the 0x48 bytes before it, so a message on a boundary is whole */
+                /* each chunk read with the 0x58 bytes before it, so a message on a boundary is whole */
                 for (u64 off = 0; off < g_regs[r].size; off += Chunk) {
-                    const u64 lead = off >= 0x48 ? 0x48 : off;
+                    const u64 lead = off >= 0x58 ? 0x58 : off;
                     const size_t len = static_cast<size_t>(std::min<u64>(Chunk, g_regs[r].size - off) + lead);
                     if (!DbgRead(g_dbg, g_chunk, g_regs[r].addr + off - lead, len)) { continue; }
-                    for (size_t i = 0x48; i + 8 <= len; i += 4) {
+                    for (size_t i = 0x58; i + 8 <= len; i += 4) {
                         if (i < lead) { continue; }
                         Msg m;
                         if (!ParseAt(g_chunk + i, std::addressof(m))) { continue; }
                         ++g_shaped;
-                        if (g_nmsgs < MaxMsgs) { m.va = g_regs[r].addr + off - lead + i; m.changed_ns = 0; g_msgs[g_nmsgs++] = m; }
+                        if (g_nmsgs < MaxMsgs) {
+                            m.va = g_regs[r].addr + off - lead + i;
+                            m.changed_ns = 0;
+                            if (m.va == keep) { g_active = static_cast<s32>(g_nmsgs); }
+                            g_msgs[g_nmsgs++] = m;
+                        }
                     }
                 }
             }
         }
 
         bool ReadMsg(u32 k, Msg *out) {
-            u8 buf[0x50];
-            if (!DbgRead(g_dbg, buf, g_msgs[k].va - 0x48, sizeof(buf))) { return false; }
-            return ParseAt(buf + 0x48, out);
+            u8 buf[0x60];
+            if (!DbgRead(g_dbg, buf, g_msgs[k].va - 0x58, sizeof(buf))) { return false; }
+            return ParseAt(buf + 0x58, out);
         }
 
         void Feed(const Msg &m) {
@@ -124,12 +142,16 @@ namespace ams::mitm::applet {
             static constexpr s32 NoCrop[4] = { 0, 0, 0, 0 };
             RecordPresent(m.slot, true, 1, fence, 0, NoCrop);
             ++g_fed;
+            ++g_win_fed;
+            g_win_layer = m.layer;
+            if (m.slot >= 0 && m.slot < 8) { ++g_win_slots[m.slot]; }
         }
 
         /* ~1 ms: the followed message; every 20 ms: all of them (another
          * layer came to the front); nothing moving for 2 s: scan again */
         void FeedThread(void *) {
-            u64 last_all = 0, last_any = NowNs(), last_scan = NowNs();
+            const u64 t_start = NowNs();
+            u64 last_all = 0, last_any = NowNs(), last_scan = NowNs(), last_win = NowNs();
             while (!g_feed_stop.load(std::memory_order_relaxed)) {
                 const u64 now = NowNs();
                 if (g_active >= 0) {
@@ -155,15 +177,25 @@ namespace ams::mitm::applet {
                         /* follow it if the followed one has gone quiet (another layer in front) */
                         if (g_active < 0 || now - g_msgs[g_active].changed_ns > UINT64_C(60000000)) {
                             if (g_switches++ < 64) {
-                                LogLine("   ui: following layer %#llx (syncpoint %u) at %#llx", static_cast<unsigned long long>(m.layer), m.fence_id,
-                                        static_cast<unsigned long long>(m.va));
+                                LogLine("   ui: following layer %#llx (syncpoint %u, slot %d) at %#llx", static_cast<unsigned long long>(m.layer), m.fence_id,
+                                        m.slot, static_cast<unsigned long long>(m.va));
                             }
                             g_active = static_cast<s32>(k);
                             Feed(m);
                         }
                     }
                 }
-                if (now - last_any > UINT64_C(2000000000) && now - last_scan > UINT64_C(2000000000)) {
+                if (now - last_win >= UINT64_C(5000000000)) {
+                    last_win = now;
+                    LogLine("   ui: 5 s: %u frames fed from layer %#llx, slots 0-6: %u %u %u %u %u %u %u", g_win_fed, static_cast<unsigned long long>(g_win_layer),
+                            g_win_slots[0], g_win_slots[1], g_win_slots[2], g_win_slots[3], g_win_slots[4], g_win_slots[5], g_win_slots[6]);
+                    g_win_fed = 0;
+                    for (u32 k = 0; k < 8; ++k) { g_win_slots[k] = 0; }
+                }
+                /* nothing found yet: again every 200 ms for the session's first 3 s
+                 * (a scan reads ~7 MB of vi - not something to repeat forever) */
+                const bool none = g_active < 0 && now - t_start < UINT64_C(3000000000) && now - last_scan > UINT64_C(200000000);
+                if (none || (now - last_any > UINT64_C(2000000000) && now - last_scan > UINT64_C(2000000000))) {
                     last_scan = now;
                     Scan();
                 }

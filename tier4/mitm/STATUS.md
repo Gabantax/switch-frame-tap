@@ -325,6 +325,23 @@ shaped). **test2:** a message counts only with its CMIF header ("SFCI" +
 rescans only in a session's first 3 s, the followed message kept across
 rescans; every 5 s the layer fed and its slot histogram.
 
+**test2 run (`logs/v0714-test2`) - the HOME menu streams:** after a game
+closed, "the home menu showed perfectly and the controller menu works fine
+too" (user, with a recording). The feeder: layer 0xd, exactly 300 frames per
+5 s, slots 3/4 150/150, for over a minute; the controller applet followed
+(layer 0x18, syncpoint 26) and back to 0xd on close. Two gaps: nothing before
+the first game (the engines start on a game's first present -
+RequestVicBlit), and the user picker stopped the stream with "a manual,
+news or eShop is open": Applet pool 270 MB with our 41 > the donor watch's
+"others above 160 MB" (which is there for the browser, 494 of 500 MB).
+
+**test3:** with home_menu on, the VIC worker starts the engines at boot
+(after start_delay); while the HOME menu streams (UI session, or no game
+running) the donor watch and the setup gate stop only for a web applet
+(0x100A web, 0x100B shop, 0x100F offlineWeb, 0x1010 loginShare, 0x1011 Wi-Fi
+login - checked when the pool grows 32 MB) or a pool within 48 MB of full;
+game sessions keep the old rule.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

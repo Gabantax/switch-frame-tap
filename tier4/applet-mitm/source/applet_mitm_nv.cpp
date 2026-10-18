@@ -8081,9 +8081,21 @@ namespace ams::mitm::applet {
         }
 
         void VicWorkerThread(void *) {
+            bool ui_started = false;
             for (;;) {
                 os::SleepThread(TimeSpan::FromMilliSeconds(200));
                 UsbFollowStreamSwitch();
+                /* v0.7.14: with home_menu = 1 the engines do not wait for the
+                 * first game's present - the HOME menu streams from boot
+                 * (test2: nothing until a game was opened) */
+                if (!ui_started && g_ui_stream_armed && g_live_armed && g_vic_pending.load(std::memory_order_acquire) < 0 &&
+                    armTicksToNs(armGetSystemTick()) >= static_cast<u64>(g_probe_delay_s) * UINT64_C(1000000000)) {
+                    ui_started = true;
+                    LogLine("live: home_menu - starting without waiting for a game");
+                    g_last_slot = 0;
+                    RunVicBlit(0);
+                    while (g_rearm.exchange(false)) { RunVicBlit(g_last_slot); }
+                }
                 const s32 slot = g_vic_pending.exchange(-1, std::memory_order_acq_rel);
                 if (slot >= 0) {
                     g_last_slot = slot;

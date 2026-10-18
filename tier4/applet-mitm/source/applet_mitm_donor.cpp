@@ -1,6 +1,8 @@
 #include "applet_mitm_donor.hpp"
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
+#include "applet_mitm_service.hpp"
+#include "applet_mitm_uisource.hpp"
 
 namespace ams::mitm::applet {
 
@@ -49,6 +51,30 @@ namespace ams::mitm::applet {
     constinit std::atomic<bool> g_applet_needs_memory{false};
 
     namespace {
+        /* v0.7.14: the applets that end up needing (nearly) the whole Applet
+         * pool are the web ones - the browser, the eShop, manuals and news,
+         * the Nintendo Account and Wi-Fi login pages */
+        bool WebAppletRunning() {
+            static constexpr u64 Web[] = { 0x010000000000100Aull, 0x010000000000100Bull, 0x010000000000100Full, 0x0100000000001010ull, 0x0100000000001011ull };
+            for (const u64 id : Web) {
+                os::ProcessId pid{};
+                if (R_SUCCEEDED(::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{id})) && pid.value != 0) { return true; }
+            }
+            return false;
+        }
+
+        /* v0.7.14: while the HOME menu streams (no game running), other
+         * applets keep it going - the user picker took the Applet pool to
+         * 270 MB of 500 with our 41 (test2) and the stream stopped for it.
+         * Only a web applet, or a pool within 48 MB of full, stops it. A
+         * game's session keeps the earlier rule. */
+        bool HomeMenuRules() {
+            return g_ui_session_active.load(std::memory_order_relaxed) || (g_ui_stream_armed && g_app_pid.load(std::memory_order_relaxed) == 0);
+        }
+        constexpr u64 TightMb = 48;
+    }
+
+    namespace {
         alignas(os::ThreadStackAlignment) constinit u8 g_watch_stack[8_KB];
         constinit os::ThreadType g_watch_thread;
         constinit u64 g_trigger_ns = 0;
@@ -69,7 +95,17 @@ namespace ams::mitm::applet {
                 u64 cur = 0, lim = 0;
                 if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { continue; }
                 const u64 mb = cur >> 20, donor_mb = g_size >> 20;
-                if (mb > donor_mb + 160) {
+                bool trigger = mb > donor_mb + 160;
+                if (HomeMenuRules()) {
+                    /* the pool grew 32 MB since the last look: is it a web applet? */
+                    static u64 checked_mb = 0;
+                    if (mb < checked_mb) { checked_mb = mb; }
+                    const bool tight = (lim >> 20) - mb < TightMb;
+                    bool web = false;
+                    if (mb >= checked_mb + 32 || tight) { checked_mb = mb; web = WebAppletRunning(); }
+                    trigger = web || tight;
+                }
+                if (trigger) {
                     LogDefer(true);   /* written once the memory is back (DonorRelease) */
                     g_trigger_ns = armTicksToNs(armGetSystemTick());
                     g_applet_needs_memory.store(true, std::memory_order_relaxed);
@@ -163,6 +199,9 @@ namespace ams::mitm::applet {
         if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { return false; }
         const u64 mb = cur >> 20;
         if (out_mb != nullptr) { *out_mb = mb; }
+        /* v0.7.14: for the HOME menu, busy only with a web applet open or no
+         * room for the donor (its ~42 MB) and the margin */
+        if (HomeMenuRules()) { return WebAppletRunning() || (lim >> 20) - mb < 48 + TightMb; }
         return mb > BusyMb;
     }
 

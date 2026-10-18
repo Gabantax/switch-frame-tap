@@ -1,0 +1,21 @@
+exp/net-ethernet (on v0.7.13+)
+===============================
+
+Goal: better wired throughput / mid-join clarity without regressing Wi-Fi.
+
+Changes
+-------
+1. On TCP accept: auto-request IDR + mark viewer can_ask (fixes colorful
+   static when connecting mid-TotK before the viewer's SFTK arrives).
+2. nifm link type logged; g_net_wired drives keyframe cadence:
+   - Wi-Fi: every 240 frames (upstream behaviour)
+   - Ethernet: every 60 frames
+3. TCP send buffer max 320 KB (was 200) for wired bursts.
+
+Baseline soak (before judging)
+------------------------------
+- Viewer stats: bitrate, fps, keyframe interval, drops
+- FT log.txt: "net: link is …", "net: auto keyframe…", busy %
+- Connect mid-game on wired: picture should clear within ~1 frame of IDR
+
+Config: no new ini keys; behaviour is automatic from nifm.

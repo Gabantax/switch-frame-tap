@@ -413,11 +413,12 @@ namespace ams::mitm::applet {
                 os::SleepThread(TimeSpan::FromMilliSeconds(8));
             }
 
-            /* each slot to the SD card, raw (tools/deswizzle.py --w 1280 --h 720) */
+            /* each slot to the SD card, raw (tools/deswizzle.py --size 1280x720) -
+             * probe5: only with the word "files" (probe3 has them) */
             static_cast<void>(fs::CreateDirectory("sdmc:/config/switch-frame-tap/probe"));
             const u64 t_files = armTicksToNs(armGetSystemTick());
             u32 written = 0;
-            for (u32 s = 0; s < slots; ++s) {
+            for (u32 s = 0; s < slots && HasWord("files"); ++s) {
                 char path[96];
                 std::snprintf(path, sizeof(path), "sdmc:/config/switch-frame-tap/probe/vi-%s-slot%u.raw", tag, s);
                 static_cast<void>(fs::DeleteFile(path));
@@ -470,7 +471,8 @@ namespace ams::mitm::applet {
         constexpr u32 MaxCands = 4096;
         constinit CorrCand g_corr[MaxCands] = {};
         constinit u32 g_ncorr = 0;
-        constinit Region g_regs[8] = {};
+        constexpr u32 MaxRegs = 48;
+        constinit Region g_regs[MaxRegs] = {};
         constinit u32 g_nregs = 0;
         constinit u32 g_survivors[16] = {};
         constinit u32 g_nsurv = 0;
@@ -485,19 +487,21 @@ namespace ams::mitm::applet {
             return false;
         }
 
-        /* vi's writable memory but the shared buffer, at most 8 MB */
+        /* vi's writable memory but the shared buffer, at most 16 MB (probe4
+         * stopped at 8 regions = 320 KB: after the shared buffer vi's .bss
+         * comes in many small pieces) */
         void FindViRegions(u64 pid, u64 skip) {
             g_nregs = 0;
             os::NativeHandle h = os::InvalidNativeHandle;
             if (ProgramOf(pid, std::addressof(h)) != ViProgramId) { if (h != os::InvalidNativeHandle) { os::CloseNativeHandle(h); } return; }
             u64 addr = 0, total = 0;
-            for (u32 guard = 0; guard < 4096 && g_nregs < 8; ++guard) {
+            for (u32 guard = 0; guard < 4096 && g_nregs < MaxRegs; ++guard) {
                 ::MemoryInfo mi = {};
                 u32 pi = 0;
                 if (R_FAILED(::svcQueryProcessMemory(&mi, &pi, h, addr)) || mi.size == 0) { break; }
                 const u32 type = mi.type & 0xFF;
                 const bool data = type == 0x04 || type == 0x05 || type == 0x09;   /* .data/.bss, heap, module .data */
-                if (data && (mi.perm & 2) != 0 && mi.addr != skip && mi.size <= 8 * 1024 * 1024 && total + mi.size <= 8 * 1024 * 1024) {
+                if (data && (mi.perm & 2) != 0 && mi.addr != skip && mi.size <= 16 * 1024 * 1024 && total + mi.size <= 16 * 1024 * 1024) {
                     g_regs[g_nregs++] = { mi.addr, mi.size };
                     total += mi.size;
                 }
@@ -507,7 +511,7 @@ namespace ams::mitm::applet {
             }
             os::CloseNativeHandle(h);
             LogLine("uiprobe: corr: %u vi regions, %llu KB to search", g_nregs, static_cast<unsigned long long>(total / 1024));
-            for (u32 r = 0; r < g_nregs; ++r) { LogLine("   region %u: %#llx %llu KB", r, static_cast<unsigned long long>(g_regs[r].addr), static_cast<unsigned long long>(g_regs[r].size / 1024)); }
+            for (u32 r = 0; r < g_nregs; ++r) { if (g_regs[r].size >= 64 * 1024) { LogLine("   region %u: %#llx %llu KB", r, static_cast<unsigned long long>(g_regs[r].addr), static_cast<unsigned long long>(g_regs[r].size / 1024)); } }
         }
 
         /* one chunk read with no present landing during it; false if presents stopped */
@@ -668,6 +672,89 @@ namespace ams::mitm::applet {
             }
         }
 
+        /* ---- probe5: vi's per-layer records, found by their slot list ---
+         * probe4: the controller applet's shared layer (handle 0x10) has the
+         * slot list {3, 4, -1, -1} (AcquireSharedFrameBuffer's reply). vi
+         * must keep that list for each shared layer; the bytes around it are
+         * the layer's state. Find every copy, then log what changes from
+         * frame to frame - with the last present's slot while an applet
+         * presents, and with which of slots 3/4 is steady on the HOME menu. */
+        void LayerStructs(const char *tag, bool presents) {
+            u64 pid = 0, base = 0, size = 0;
+            if (!FindViBuffer(std::addressof(pid), std::addressof(base), std::addressof(size))) { return; }
+            FindViRegions(pid, base);
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid); R_FAILED(ra)) { LogLine("uiprobe: layers: attach rc=0x%x", ra.GetValue()); return; }
+            static_cast<void>(DrainContinue(dbg));
+            static constexpr s32 Pattern[4] = { 3, 4, -1, -1 };
+            constexpr u32 MaxHits = 6, Before = 96, Window = 256;
+            u64 hits[MaxHits] = {};
+            u32 nhits = 0, total = 0;
+            for (u32 r = 0; r < g_nregs; ++r) {
+                for (u64 off = 0; off < g_regs[r].size; off += SnapChunk) {
+                    const size_t n = static_cast<size_t>(std::min<u64>(SnapChunk, g_regs[r].size - off));
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, g_regs[r].addr + off, n))) { continue; }
+                    for (size_t i = 0; i + sizeof(Pattern) <= n; i += 4) {
+                        if (std::memcmp(g_snap_buf + i, Pattern, sizeof(Pattern)) != 0) { continue; }
+                        ++total;
+                        const u64 va = g_regs[r].addr + off + i;
+                        if (nhits < MaxHits && va >= g_regs[r].addr + Before && va - Before + Window <= g_regs[r].addr + g_regs[r].size) { hits[nhits++] = va; }
+                    }
+                }
+                static_cast<void>(DrainContinue(dbg));
+            }
+            LogLine("uiprobe: layers (%s): {3,4,-1,-1} found %u times in %u regions; windows %#x bytes from -%#x", tag, total, g_nregs, Window, Before);
+            static u8 first[MaxHits][Window], cur[Window];
+            for (u32 k = 0; k < nhits; ++k) {
+                static_cast<void>(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(first[k]), dbg, hits[k] - Before, Window));
+                LogLine("   hit %u at %#llx:", k, static_cast<unsigned long long>(hits[k]));
+                for (u32 row = 0; row < Window; row += 32) {
+                    u32 w[8];
+                    std::memcpy(w, first[k] + row, sizeof(w));
+                    LogLine("    %+5d: %08x %08x %08x %08x %08x %08x %08x %08x", static_cast<int>(row) - static_cast<int>(Before), w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+                }
+            }
+            auto slot_hash = [&](u32 s) {
+                u64 h = 0;
+                for (size_t off = 0; off < ViSlotSize; off += SnapChunk) {
+                    if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, base + s * ViSlotSize + off, SnapChunk))) { h ^= Hash(g_snap_buf, SnapChunk) + off; }
+                }
+                return h;
+            };
+            /* 16 samples ~20-40 ms apart: the words that differ from the first look */
+            for (u32 n = 1; n <= 16 && nhits != 0; ++n) {
+                const u32 c0 = g_shared_present.count.load(std::memory_order_acquire);
+                const s32 s0 = g_shared_present.slot.load(std::memory_order_relaxed);
+                char what[64];
+                if (presents) {
+                    std::snprintf(what, sizeof(what), "last present slot %d", s0);
+                } else {
+                    const u64 a1 = slot_hash(3), b1 = slot_hash(4), a2 = slot_hash(3), b2 = slot_hash(4);
+                    std::snprintf(what, sizeof(what), "slot 3 %s, slot 4 %s", a1 == a2 ? "steady" : "MOVING", b1 == b2 ? "steady" : "MOVING");
+                }
+                for (u32 k = 0; k < nhits; ++k) {
+                    static_cast<void>(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(cur), dbg, hits[k] - Before, Window));
+                    char line[300];
+                    int len = 0;
+                    u32 diffs = 0;
+                    for (u32 i = 0; i < Window && len < static_cast<int>(sizeof(line)) - 40; i += 4) {
+                        u32 a, b;
+                        std::memcpy(std::addressof(a), first[k] + i, 4);
+                        std::memcpy(std::addressof(b), cur + i, 4);
+                        if (a == b) { continue; }
+                        ++diffs;
+                        len += std::snprintf(line + len, sizeof(line) - len, " %+d:%x", static_cast<int>(i) - static_cast<int>(Before), b);
+                    }
+                    const bool raced = presents && g_shared_present.count.load(std::memory_order_acquire) != c0;
+                    if (diffs != 0) { LogLine("   sample %2u hit %u (%s%s): %u changed:%s", n, k, what, raced ? ", a present landed meanwhile" : "", diffs, line); }
+                }
+                static_cast<void>(DrainContinue(dbg));
+                os::SleepThread(TimeSpan::FromMicroSeconds(9000 + 6100 * (n % 4)));
+            }
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+            LogLine("uiprobe: layers (%s) done", tag);
+        }
+
         /* the HOME menu alone, 75 s in; a library applet 4 s after it opened */
         void SnapSteps(u64 now, const Proc *cur, u32 cn) {
             u64 lib = 0;
@@ -679,6 +766,7 @@ namespace ams::mitm::applet {
             if (!g_snap_home_done && lib == 0 && !app && now >= UINT64_C(75000000000)) {
                 g_snap_home_done = true;
                 SnapVi("home");
+                LayerStructs("home", false);
             }
             if (lib != g_applet_tid) { g_applet_tid = lib; g_applet_since_ns = now; }
             if (!g_snap_applet_done && lib != 0 && lib != UINT64_C(0x010000000000100D) && now - g_applet_since_ns >= UINT64_C(4000000000)) {
@@ -687,12 +775,14 @@ namespace ams::mitm::applet {
                 LogLine("uiprobe: %s has been open 4 s (%u shared-layer presents seen so far)", nm != nullptr ? nm : "an applet", g_shared_present.count.load());
                 SnapVi("applet");
                 Correlate();
+                LayerStructs("applet", true);
             }
             /* the survivors checked on the HOME menu, 3 s after it is alone again */
             const bool home_alone = lib == 0 && !app;
             if (!home_alone) { g_home_alone_since = 0; } else if (g_home_alone_since == 0) { g_home_alone_since = now; }
             if (g_snap_applet_done && !g_verify_done && home_alone && now - g_home_alone_since >= UINT64_C(3000000000)) {
                 g_verify_done = true;
+                LayerStructs("home again", false);
                 VerifyOnHome();
             }
         }

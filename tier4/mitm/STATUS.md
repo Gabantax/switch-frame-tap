@@ -235,6 +235,22 @@ the last present's slot. Then on the HOME menu alone, the survivors are
 checked against which of slots 3/4 is steady (hashed twice ~6 ms apart). If a
 word passes, it tells the finished HOME-menu slot with no qlaunch IPC at all.
 
+**probe4 run (`logs/v0714-probe4`, measured):** the controller applet uses
+**vi:s**; wrapped cleanly (games and the user picker unaffected). Its shared
+layer is handle 0x10 with slot list {3, 4, -1, -1}; Acquire -> slot 3,
+Present slot 3, Acquire -> 4, Present 4, ... at 60 Hz (1200 presents in 20
+s); each Present carries one fence (syncpoint 26, +3 a frame) - when its
+pixels are done. Crop (0,0)-(0,0), transform 0, swap interval 1. The
+correlation searched only 320 KB (it stopped at 8 regions; vi's .bss after
+the shared buffer is many small pieces) - 6 candidates, none survived.
+
+**probe5 (v0.7.14-probe5):** correlation over up to 48 regions / 16 MB; and
+vi's per-layer records found by their slot list {3,4,-1,-1}: a 256-byte window
+around each copy dumped, then the words that change over 16 samples logged -
+with the last present's slot (applet open) or which of slots 3/4 is steady
+(HOME menu, at 75 s and again after the applet). Slot files now opt-in
+("files").
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

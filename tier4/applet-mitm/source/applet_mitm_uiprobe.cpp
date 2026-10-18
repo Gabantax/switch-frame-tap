@@ -52,6 +52,22 @@
 #include "applet_mitm_gbuf.hpp"
 #include "applet_mitm_uibinder.hpp"
 
+/* v0.7.14: research only - left out of release builds (SFT_UI_PROBE,
+ * applet_mitm_uibinder.hpp) */
+#if !SFT_UI_PROBE
+
+namespace ams::mitm::applet {
+
+    bool UiProbeOn() { return false; }
+    bool UiProbeWants(const char *) { return false; }
+    /* only its pointer buffer size was wanted */
+    void UiProbeSetDispdrv(const ::Service &s) { ::Service c = s; ::serviceClose(std::addressof(c)); }
+    void UiProbeStep() { }
+
+}
+
+#else
+
 namespace ams::mitm::applet {
 
     namespace {
@@ -1221,3 +1237,5 @@ namespace ams::mitm::applet {
     }
 
 }
+
+#endif

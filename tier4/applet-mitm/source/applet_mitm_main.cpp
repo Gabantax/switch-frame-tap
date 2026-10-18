@@ -111,8 +111,17 @@ namespace ams {
             static constexpr bool CanDeferInvokeRequest = false;
             static constexpr bool CanManageMitmServers  = true;
         };
-        constexpr size_t UiMaxSessions = 12;   /* probe4: an applet's vi:s root, display service, system display service, relay */
+        /* probe4: an applet's vi:s root, display service, system display
+         * service, relay. Without the probe only the Album's dispdrv session
+         * is served; each session here costs its 12 KB pointer buffer in
+         * memory, with home_menu off too (v0.7.14: 12 -> 4, one fewer thread) */
+#if SFT_UI_PROBE
+        constexpr size_t UiMaxSessions = 12;
         constexpr size_t UiThreads = 3;
+#else
+        constexpr size_t UiMaxSessions = 4;
+        constexpr size_t UiThreads = 2;
+#endif
         class UiServerManager final : public sf::hipc::ServerManager<UiPortIndex_Count, UiServerOptions, UiMaxSessions> {
             private:
                 virtual Result OnNeedsToAccept(int port_index, Server *server) override;
@@ -125,6 +134,11 @@ namespace ams {
         /* our own dispdrv session first (taken before the mitm exists, so it
          * is the real service), and its pointer buffer: a mitm session's
          * must be at least as large or libstratosphere aborts on accept */
+        /* GCC 15 guesses the vi server's AllocateServer here (speculative
+         * devirtualization) and, the UI server being the smaller of the two,
+         * warns about a path that never runs */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
         void StartUiBinderMitm() {
             /* v0.7.14: dispdrv also for the Album with home_menu on */
             if (!mitm::applet::UiProbeOn() && !mitm::applet::g_ui_stream_armed) { return; }
@@ -134,15 +148,15 @@ namespace ams {
                 mitm::applet::SmUse sm_dd;
                 rc = ::smGetService(std::addressof(dd), "dispdrv");
             }
-            if (R_FAILED(rc)) { mitm::applet::LogLine("uiprobe: dispdrv not opened rc=0x%x - no dispdrv mitm, no binder look", rc); return; }
-            mitm::applet::LogLine("uiprobe: dispdrv opened, its pointer buffer %#x (ours %#zx)", static_cast<unsigned>(dd.pointer_buffer_size), UiServerOptions::PointerBufferSize);
+            if (R_FAILED(rc)) { mitm::applet::LogLine("home menu: dispdrv not opened rc=0x%x - the Album is not streamed", rc); return; }
+            mitm::applet::LogLine("home menu: dispdrv's pointer buffer %#x (ours %#zx)", static_cast<unsigned>(dd.pointer_buffer_size), UiServerOptions::PointerBufferSize);
             mitm::applet::UiProbeSetDispdrv(dd);
             bool any = false;
             const bool probe_dd = mitm::applet::UiProbeWants("dispdrv");
             if (!probe_dd && !mitm::applet::g_ui_stream_armed) {
                 mitm::applet::LogLine("uiprobe: dispdrv mitm off (nodispdrv)");
             } else if (dd.pointer_buffer_size > UiServerOptions::PointerBufferSize) {
-                mitm::applet::LogLine("uiprobe: dispdrv's pointer buffer is larger than ours - not wrapping it");
+                mitm::applet::LogLine("home menu: dispdrv's pointer buffer is larger than ours - the Album is not streamed");
             } else {
                 mitm::applet::g_ui_dispdrv_probe.store(probe_dd);
                 SFT_ABORT_UNLESS(g_ui_server_manager.RegisterMitmServer<mitm::applet::UiBinderMitm>(UiPortIndex_Dispdrv, DispdrvServiceName));
@@ -182,8 +196,9 @@ namespace ams {
                 os::StartThread(std::addressof(g_ui_threads[i]));
                 mitm::applet::NoteThread(std::addressof(g_ui_threads[i]));
             }
-            mitm::applet::LogLine("uiprobe: ui server up (dispdrv/vi:s for the HOME menu and applets - pass-through, logging), %zu threads", UiThreads);
+            mitm::applet::LogLine("home menu: dispdrv server up, %zu threads", UiThreads);
         }
+#pragma GCC diagnostic pop
 
         /* ---- M72: the grc recorder's own server --------------------------
          * Separate from vi:u on purpose. Anything forwarded for grc can block
@@ -644,7 +659,8 @@ namespace ams {
             mitm::applet::g_nvab_armed = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "nvab");
             /* on unless config sets detach_on_home=0 (nodethome) */
             mitm::applet::g_detach_on_home = !mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "nodethome");
-            mitm::applet::g_ui_stream_armed = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "homemenu");
+            /* (home_menu is read at boot only: the Album's dispdrv mitm and the
+             * HOME menu's start are set up then) */
             g_screen_off.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "screenoff"), std::memory_order_relaxed);
             mitm::applet::g_early_collect = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyoff") ? 0
                                           : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyab") ? 2 : 1;
@@ -1092,7 +1108,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14-test8: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.14-beta1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1303,7 +1319,7 @@ namespace ams {
             }
             mitm::applet::LogLine("vi server: %zu threads, %zu sessions", ViThreads, MaxSessions);
         }
-        /* v0.7.14 research: off without probe-ui.txt */
+        /* v0.7.14: with home_menu on (or the research probe) */
         StartUiBinderMitm();
         /* v0.7.10: drop the boot reference to sm (sm::Initialize). Our own sm
          * connection is charged to the Applet group and cost the applets one

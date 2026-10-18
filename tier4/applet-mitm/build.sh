@@ -19,7 +19,10 @@ docker run --rm -v "$AMS":/ams "$IMG" chown -R "$UIDGID" /ams/stratosphere/apple
 # tier4 libstratosphere patch (idempotent): non-domain mitm sub-object forwarding
 python3 "$SRC/patch_libstrat.py" "$AMS"
 
-rsync -a --delete \
+# by content, and a changed file gets the time of the copy: with the sources'
+# own times an older checkout (another branch) kept the newer objects of the
+# last build, and the link failed or, worse, used them
+rsync -rlpgoD --checksum --delete \
   --exclude build.sh --exclude '*.nsp' --exclude patch_libstrat.py --exclude out/ --exclude build/ --exclude test/ \
   "$SRC"/ "$DST"/
 

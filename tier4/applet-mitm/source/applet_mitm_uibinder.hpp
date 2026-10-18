@@ -25,6 +25,13 @@
 #include <stratosphere.hpp>
 #include <atomic>
 
+/* v0.7.14: the HOME-menu research probe (applet_mitm_uiprobe.cpp) is left out
+ * of release builds; -DSFT_UI_PROBE=1 builds it back in, and probe-ui.txt
+ * then turns it on */
+#ifndef SFT_UI_PROBE
+#define SFT_UI_PROBE 0
+#endif
+
 #define AMS_UI_BINDER_MITM_INTERFACE_INFO(C, H)                                                                                                                                                                      \
     AMS_SF_METHOD_INFO(C, H, 0, Result, TransactParcel,     (s32 binder_id, u32 code, u32 flags, const sf::InBuffer &parcel_in, const sf::OutBuffer &parcel_out), (binder_id, code, flags, parcel_in, parcel_out))            \
     AMS_SF_METHOD_INFO(C, H, 1, Result, AdjustRefcount,     (s32 binder_id, s32 add, s32 type), (binder_id, add, type))                                                                                                     \

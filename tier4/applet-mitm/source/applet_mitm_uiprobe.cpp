@@ -19,6 +19,17 @@
  *           ids answer "query" (read-only), the HOME menu's among them, its
  *           buffer history (code 17), and requestBuffer on its slots - which
  *           only succeeds while the slot is dequeued, i.e. being drawn
+ *
+ * probe2 result (logs/v0714-probe2): the buffer is in vi's .bss, 26,880 KB =
+ * 7 slots of 1280x768x4, device count 2, the same address all boot; the
+ * dispdrv mitm stayed off (dispdrv's pointer buffer is 0x3000); every
+ * binder answered query with a bare 4-byte status.
+ *
+ * probe3 adds:
+ *  snap     vi attached as a debugger for a moment, its 7 slots hashed in 12
+ *           passes ~20 ms apart (which slots are being drawn) and written to
+ *           sdmc:/config/switch-frame-tap/probe/vi-<home|applet>-slotN.raw -
+ *           on the HOME menu alone 75 s in, and with a library applet open 4 s
  */
 #include <stratosphere.hpp>
 #include <cctype>
@@ -253,7 +264,9 @@ namespace ams::mitm::applet {
                 const Result rw = OwnTransact(id, 9, std::addressof(a), 1, std::addressof(p), std::addressof(len));
                 const s32 w = Word(p, len, 0), sw = Word(p, len, 1);
                 if (R_FAILED(rw) || len < 8) {
-                    LogLine("   binder %d: query rc=0x%x reply %u bytes", id, rw.GetValue(), len);
+                    /* probe2: every id 1..24 answered with 4 bytes - the status alone */
+                    LogLine("   binder %d: query rc=0x%x reply %u bytes, status %d", id, rw.GetValue(), len, Word(p, len, 0));
+                    if (id == 1 && R_SUCCEEDED(rw)) { Hex("reply parcel", g_tx_out, 0x20); }
                     continue;
                 }
                 a = 1;   /* HEIGHT */
@@ -299,6 +312,157 @@ namespace ams::mitm::applet {
             }
         }
 
+        /* ---- probe3: vi's system shared buffer ------------------------
+         * probe2: vi holds one 26,880 KB region of .bss mapped by GPU and
+         * display = 7 x 3,840 KB = 7 slots of 1280x768x4. The HOME menu and
+         * the library applets draw into it (they have no buffers of their
+         * own). vi is attached as a debugger only for the snapshot - the
+         * attach burst drained and continued at once, events polled between
+         * chunks - and each slot is written raw to the SD card. */
+        constexpr u64 ViProgramId = UINT64_C(0x010000000000002D);
+        constexpr size_t ViSlotSize = 1280 * 768 * 4;
+        constexpr u32 ViSlots = 7;
+        constexpr size_t SnapChunk = 64 * 1024;
+        alignas(0x1000) constinit u8 g_snap_buf[SnapChunk] = {};
+        constinit bool g_snap_home_done = false;
+        constinit bool g_snap_applet_done = false;
+        constinit u64 g_applet_since_ns = 0;
+        constinit u64 g_applet_tid = 0;
+
+        /* continue whatever the attach or a thread start/exit left pending */
+        u32 DrainContinue(::ams::svc::Handle dbg) {
+            u32 n = 0;
+            ::ams::svc::DebugEventInfo ev;
+            while (n < 256 && R_SUCCEEDED(::ams::svc::GetDebugEvent(std::addressof(ev), dbg))) { ++n; }
+            if (n != 0) {
+                static_cast<void>(::ams::svc::ContinueDebugEvent(dbg, ::ams::svc::ContinueFlag_ExceptionHandled | ::ams::svc::ContinueFlag_ContinueAll, nullptr, 0));
+            }
+            return n;
+        }
+
+        /* the 7-slot region in vi: CodeMutable, two devices, 26,880 KB */
+        bool FindViBuffer(u64 *out_pid, u64 *out_addr, u64 *out_size) {
+            os::ProcessId pid{};
+            if (R_FAILED(::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{ViProgramId})) || pid.value == 0) { return false; }
+            os::NativeHandle h = os::InvalidNativeHandle;
+            if (ProgramOf(pid.value, std::addressof(h)) != ViProgramId) { if (h != os::InvalidNativeHandle) { os::CloseNativeHandle(h); } return false; }
+            u64 addr = 0, best = 0, best_size = 0;
+            for (u32 guard = 0; guard < 4096; ++guard) {
+                ::MemoryInfo mi = {};
+                u32 pi = 0;
+                if (R_FAILED(::svcQueryProcessMemory(&mi, &pi, h, addr)) || mi.size == 0) { break; }
+                if (mi.device_refcount >= 2 && mi.size >= ViSlotSize * 2 && mi.size > best_size) { best = mi.addr; best_size = mi.size; }
+                const u64 next = mi.addr + mi.size;
+                if (next <= addr) { break; }
+                addr = next;
+            }
+            os::CloseNativeHandle(h);
+            *out_pid = pid.value;
+            *out_addr = best;
+            *out_size = best_size;
+            return best != 0;
+        }
+
+        u64 Hash(const u8 *p, size_t n) {
+            u64 h = 0xcbf29ce484222325ull;
+            for (size_t i = 0; i + 8 <= n; i += 256) { u64 v; std::memcpy(std::addressof(v), p + i, 8); h = (h ^ v) * 0x100000001b3ull; }
+            return h;
+        }
+
+        void SnapVi(const char *tag) {
+            u64 pid = 0, base = 0, size = 0;
+            if (!FindViBuffer(std::addressof(pid), std::addressof(base), std::addressof(size))) { LogLine("uiprobe: snap %s: vi's shared buffer not found", tag); return; }
+            const u32 slots = static_cast<u32>(size / ViSlotSize) < ViSlots ? static_cast<u32>(size / ViSlotSize) : ViSlots;
+            LogLine("uiprobe: snap %s: vi pid %llu, shared buffer %#llx, %llu KB = %u slots (+%llu KB)", tag, static_cast<unsigned long long>(pid),
+                    static_cast<unsigned long long>(base), static_cast<unsigned long long>(size / 1024), slots,
+                    static_cast<unsigned long long>((size - static_cast<u64>(slots) * ViSlotSize) / 1024));
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            const u64 t_attach = armTicksToNs(armGetSystemTick());
+            const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid);
+            if (R_FAILED(ra)) { LogLine("uiprobe: snap %s: DebugActiveProcess(vi) rc=0x%x", tag, ra.GetValue()); return; }
+            const u32 burst = DrainContinue(dbg);
+            const u64 t_resumed = armTicksToNs(armGetSystemTick());
+
+            /* which slots change: 12 passes ~20 ms apart, a sparse hash of each slot */
+            static u64 hashes[12][ViSlots];
+            u64 pass_ns[12] = {};
+            u32 events = 0, read_fail = 0;
+            for (u32 p = 0; p < 12; ++p) {
+                const u64 t0 = armTicksToNs(armGetSystemTick());
+                for (u32 s = 0; s < slots; ++s) {
+                    u64 h = 0;
+                    for (size_t off = 0; off < ViSlotSize; off += SnapChunk) {
+                        if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, base + s * ViSlotSize + off, SnapChunk))) { ++read_fail; continue; }
+                        h ^= Hash(g_snap_buf, SnapChunk) + off;
+                    }
+                    hashes[p][s] = h;
+                }
+                pass_ns[p] = armTicksToNs(armGetSystemTick()) - t0;
+                events += DrainContinue(dbg);
+                os::SleepThread(TimeSpan::FromMilliSeconds(8));
+            }
+
+            /* each slot to the SD card, raw (tools/deswizzle.py --w 1280 --h 720) */
+            static_cast<void>(fs::CreateDirectory("sdmc:/config/switch-frame-tap/probe"));
+            const u64 t_files = armTicksToNs(armGetSystemTick());
+            u32 written = 0;
+            for (u32 s = 0; s < slots; ++s) {
+                char path[96];
+                std::snprintf(path, sizeof(path), "sdmc:/config/switch-frame-tap/probe/vi-%s-slot%u.raw", tag, s);
+                static_cast<void>(fs::DeleteFile(path));
+                if (R_FAILED(fs::CreateFile(path, static_cast<s64>(ViSlotSize)))) { LogLine("uiprobe: snap %s: cannot create %s", tag, path); break; }
+                fs::FileHandle f;
+                if (R_FAILED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Write))) { break; }
+                bool ok = true;
+                for (size_t off = 0; off < ViSlotSize && ok; off += SnapChunk) {
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, base + s * ViSlotSize + off, SnapChunk))) { ++read_fail; std::memset(g_snap_buf, 0, SnapChunk); }
+                    ok = R_SUCCEEDED(fs::WriteFile(f, static_cast<s64>(off), g_snap_buf, SnapChunk, fs::WriteOption::None));
+                    events += DrainContinue(dbg);
+                }
+                static_cast<void>(fs::FlushFile(f));
+                fs::CloseFile(f);
+                if (ok) { ++written; }
+            }
+            const u64 t_done = armTicksToNs(armGetSystemTick());
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+
+            LogLine("uiprobe: snap %s: attach %u events, vi resumed after %llu us; hash passes %llu..%llu us each (%u slots = %llu KB); files %u in %llu ms; %u events while attached, %u failed reads; detached",
+                    tag, burst, static_cast<unsigned long long>((t_resumed - t_attach) / 1000),
+                    static_cast<unsigned long long>(pass_ns[1] / 1000), static_cast<unsigned long long>(pass_ns[11] / 1000), slots,
+                    static_cast<unsigned long long>(slots * ViSlotSize / 1024), written, static_cast<unsigned long long>((t_done - t_files) / 1000000), events, read_fail);
+            for (u32 s = 0; s < slots; ++s) {
+                char line[12 * 6 + 1] = {};
+                u32 changes = 0;
+                for (u32 p = 0; p < 12; ++p) {
+                    const bool ch = p > 0 && hashes[p][s] != hashes[p - 1][s];
+                    changes += ch;
+                    std::snprintf(line + 6 * p, 7, "%04x%s", static_cast<unsigned>(hashes[p][s] & 0xFFFF), ch ? "* " : "  ");
+                }
+                LogLine("   slot %u: changed %2u of 11 passes: %s", s, changes, line);
+            }
+        }
+
+        /* the HOME menu alone, 75 s in; a library applet 4 s after it opened */
+        void SnapSteps(u64 now, const Proc *cur, u32 cn) {
+            u64 lib = 0;
+            for (u32 j = 0; j < cn; ++j) {
+                const u64 t = cur[j].tid;
+                if (IsUiProgram(t) && t != UINT64_C(0x0100000000001000) && t != UINT64_C(0x010000000000100C)) { lib = t; }
+            }
+            const bool app = g_app_pid.load(std::memory_order_relaxed) != 0;
+            if (!g_snap_home_done && lib == 0 && !app && now >= UINT64_C(75000000000)) {
+                g_snap_home_done = true;
+                SnapVi("home");
+            }
+            if (lib != g_applet_tid) { g_applet_tid = lib; g_applet_since_ns = now; }
+            if (!g_snap_applet_done && lib != 0 && lib != UINT64_C(0x010000000000100D) && now - g_applet_since_ns >= UINT64_C(4000000000)) {
+                g_snap_applet_done = true;
+                const char *nm = AppletName(lib);
+                LogLine("uiprobe: %s has been open 4 s", nm != nullptr ? nm : "an applet");
+                SnapVi("applet");
+            }
+        }
+
         void Summaries(u64 now) {
             if (now < g_next_summary_ns) { return; }
             g_next_summary_ns = now + UINT64_C(5000000000);
@@ -335,8 +499,9 @@ namespace ams::mitm::applet {
         if (!g_probe_checked) {
             ReadConfig();
             if (g_probe_on) {
-                LogLine("uiprobe: on (config/switch-frame-tap/probe-ui.txt: \"%.40s\") - map %s, dispdrv %s, binders %s", g_probe_words,
-                        UiProbeWants("map") ? "on" : "off", UiProbeWants("dispdrv") ? "on" : "off", UiProbeWants("binders") ? "on" : "off");
+                LogLine("uiprobe: on (config/switch-frame-tap/probe-ui.txt: \"%.40s\") - map %s, dispdrv %s, binders %s, snap %s", g_probe_words,
+                        UiProbeWants("map") ? "on" : "off", UiProbeWants("dispdrv") ? "on" : "off", UiProbeWants("binders") ? "on" : "off",
+                        UiProbeWants("snap") ? "on" : "off");
             }
         }
         if (!g_probe_on || g_pmdmnt_rc != 0) { return; }
@@ -404,6 +569,7 @@ namespace ams::mitm::applet {
             LogLine("uiprobe: application running: %s", app != 0 ? "yes" : "no");
             g_last_app = app;
         }
+        if (UiProbeWants("snap")) { SnapSteps(now, cur, cn); }
         if ((first || changed) && UiProbeWants("map")) {
             g_dump_at_ns = now + UINT64_C(2000000000);   /* let it allocate first */
             g_dump_why = first ? "idle" : "a HOME-menu process or applet started";

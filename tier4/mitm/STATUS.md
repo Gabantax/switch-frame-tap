@@ -182,6 +182,30 @@ device-mapped memory is 6144 + 2872 + 544 + 908 KB, devices 1 (GPU pools).
   - its buffer descriptors without seeing its traffic. Last in the boot: an
   unknown binder id could upset nvnflinger.
 
+**probe2 run (`logs/v0714-probe2`, 2026-10-17, measured):**
+- **The system shared buffer is in vi's own .bss:** one region of **26,880 KB
+  = 7 x 3,840 KB = 7 slots of 1280x768x4**, CodeMutable, attr DeviceShared,
+  devices 2, at the same address in all five dumps of the boot (idle, Album,
+  controller, myPage, user picker). The controller applet and myPage have no
+  devices-2 region of their own either: they draw into vi's slots too. The
+  Album keeps its own 2 x 3,840 KB.
+- `svcMapProcessMemory` cannot map it (mesosphere wants attribute None; this
+  is DeviceShared): reading it means attaching to vi as a debugger, as games
+  are read.
+- The dispdrv mitm stayed off: dispdrv's pointer buffer is **0x3000**, ours
+  was 0x1000 (the pre-check worked - no abort).
+- Every binder id 1..24 answered our own `query` with a 4-byte reply (status
+  only, value not logged) - the HOME menu's binder not identified.
+- No crash, no stall; the boot ran 6 minutes with a game launched and closed.
+
+**probe3 (v0.7.14-probe3):** dispdrv mitm with a 0x3000 pointer buffer; the
+binder look logs the status word; **vi snapshot**: attach vi, drain and
+continue at once, 12 passes over the 7 slots ~20 ms apart (a hash per slot:
+which ones are being drawn), each slot written raw to
+`config/switch-frame-tap/probe/vi-<home|applet>-slotN.raw` (75 s in on the
+HOME menu alone; 4 s into a library applet). `tools/deswizzle.py --size
+1280x720` turns a slot into a PNG.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

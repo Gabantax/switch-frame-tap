@@ -102,13 +102,13 @@ namespace ams {
         };
         constexpr sm::ServiceName DispdrvServiceName = sm::ServiceName::Encode("dispdrv");
         struct UiServerOptions {
-            static constexpr size_t PointerBufferSize   = 0x1000;
+            static constexpr size_t PointerBufferSize   = 0x3000;   /* probe2: dispdrv's is 0x3000 */
             static constexpr size_t MaxDomains          = 4;
             static constexpr size_t MaxDomainObjects    = 16;
             static constexpr bool CanDeferInvokeRequest = false;
             static constexpr bool CanManageMitmServers  = true;
         };
-        constexpr size_t UiMaxSessions = 8;
+        constexpr size_t UiMaxSessions = 6;
         constexpr size_t UiThreads = 3;
         class UiServerManager final : public sf::hipc::ServerManager<UiPortIndex_Count, UiServerOptions, UiMaxSessions> {
             private:
@@ -1045,7 +1045,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14-probe2: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.14-probe3: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

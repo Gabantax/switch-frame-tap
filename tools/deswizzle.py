@@ -13,6 +13,9 @@ Bytes per pixel are R,G,B,A - A8B8G8R8 as a little-endian 32-bit word - which is
 already PNG's RGBA order, so no channel swap is needed.
 
 Usage:  python3 tools/deswizzle.py applet-mitm-frame.bin [out.png]
+        python3 tools/deswizzle.py vi-home-slot3.raw slot3.png --size 1280x720
+                (vi's shared buffer: 1280x720, rows padded to 768, block height 16)
+        --block-h N   GOBs per block (default 16), --pitch for a linear surface
 """
 import sys, zlib, struct
 
@@ -23,6 +26,16 @@ BLOCK_H      = 16               # 1 << block_height_log2
 BLOCK_SZ     = GOB_W * GOB_H * BLOCK_H      # 8192
 BLOCKS_ROW   = PITCH // GOB_W               # 120
 BLOCK_ROW_SZ = BLOCKS_ROW * BLOCK_SZ        # 983040
+
+
+def set_size(w, h, block_h=16):
+    """Another surface size (a vi shared-buffer slot is 1280x720)."""
+    global W, H, PITCH, BLOCK_H, BLOCK_SZ, BLOCKS_ROW, BLOCK_ROW_SZ
+    W, H, BLOCK_H = w, h, block_h
+    PITCH        = W * BPP
+    BLOCK_SZ     = GOB_W * GOB_H * BLOCK_H
+    BLOCKS_ROW   = (PITCH + GOB_W - 1) // GOB_W
+    BLOCK_ROW_SZ = BLOCKS_ROW * BLOCK_SZ
 
 
 def gob_offset(x, y):
@@ -79,19 +92,38 @@ def write_png(path, rows, opaque=True, crop_w=None):
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    def opt(name):
+        if name in args:
+            i = args.index(name)
+            v = args[i + 1]
+            del args[i:i + 2]
+            return v
+        return None
+    size, bh = opt("--size"), opt("--block-h")
+    pitch = "--pitch" in args
+    flags = [a for a in args if a.startswith("--")]
+    crop_arg = opt("--crop")
+    pos = [a for a in args if not a.startswith("--")]
+    if not pos:
         print(__doc__)
         return 1
-    src = sys.argv[1]
-    out = sys.argv[2] if len(sys.argv) > 2 else "frame.png"
+    if size or bh:
+        w, h = (int(v) for v in (size or f"{W}x{H}").lower().split("x"))
+        set_size(w, h, int(bh) if bh else 16)
+    src = pos[0]
+    out = pos[1] if len(pos) > 1 else "frame.png"
     data = open(src, "rb").read()
     print(f"{src}: {len(data):,} bytes ({len(data)/BLOCK_ROW_SZ:.2f} block-rows)")
-    rows = deswizzle(data, H)
+    if pitch:
+        rows = [bytearray(data[y * PITCH:(y + 1) * PITCH].ljust(PITCH, b"\0")) for y in range(H)]
+    else:
+        rows = deswizzle(data, H)
     crop = None
-    if "--crop" in sys.argv:
-        cw, ch = sys.argv[sys.argv.index("--crop") + 1].lower().split("x")
+    if crop_arg:
+        cw, ch = crop_arg.lower().split("x")
         crop, rows = int(cw), rows[: int(ch)]
-    write_png(out, rows, opaque="--keep-alpha" not in sys.argv, crop_w=crop)
+    write_png(out, rows, opaque="--keep-alpha" not in flags, crop_w=crop)
     nz = sum(1 for r in rows for b in r if b)
     print(f"wrote {out}  ({crop or W}x{len(rows)}, {nz:,} nonzero bytes)")
     return 0

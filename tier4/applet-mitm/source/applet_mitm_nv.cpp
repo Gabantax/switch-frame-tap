@@ -623,13 +623,19 @@ namespace ams::mitm::applet {
             LogLine("   MAP_CMD_BUFFER(%s handle=%u compr=%u req=0x%08x) rc=0x%x nverr=%u -> phys=0x%x",
                     what, handle, is_compr, req, rc, nverr, a.phys_addr_out);
             if (R_FAILED(rc) || nverr != 0) { return false; }
-            if (a.phys_addr_out == 0 && AbsorbDeviceZero(chan_fd, req)) {
-                /* ours was at 0: move it off */
+            if (a.phys_addr_out == 0) {
+                /* ours was at 0: move it off. v0.7.14: unmapped FIRST - the
+                 * guard was mapped while ours still held 0, so it always
+                 * landed above it and the retry never ran: after a homebrew
+                 * app closed (its buffers had held the low addresses) every
+                 * session refused its slot until reboot (test3) */
                 MapCmdBufArgs u = {};
                 u.num_handles  = 1;
                 u.handle_id_in = handle;
                 u32 ue = 0;
                 NvIoctl(chan_fd, NvHostIocChannelUnmapCmdBuf, std::addressof(u), sizeof(u), std::addressof(ue));
+                const bool guarded = AbsorbDeviceZero(chan_fd, req);
+                if (!guarded) { LogLine("   %s: the guard page did not take device address 0 - mapping again anyway", what); }
                 a = {};
                 a.num_handles  = 1;
                 a.is_compr     = is_compr;
@@ -1560,7 +1566,8 @@ namespace ams::mitm::applet {
         constinit os::ThreadType g_vic_thread;
 
     void RunVicBlit(s32 slot) {
-        if (!g_vic_armed || !g_game_surface.armed) { return; }
+        /* v0.7.14: with home_menu on, no game is needed (the HOME menu streams) */
+        if (!g_vic_armed || (!g_game_surface.armed && !g_ui_stream_armed)) { return; }
         bool expected = false;
         if (!g_blit_done.compare_exchange_strong(expected, true)) { return; }
 
@@ -6499,7 +6506,7 @@ namespace ams::mitm::applet {
                         const u64 age_ns = armTicksToNs(armGetSystemTick() - qt);
                         if (age_ns >= UINT64_C(1000000000)) {
                             why = "HOME / game stopped presenting";
-                            PrepareForHomeMenu();
+                            if (!g_ui_stream_armed) { PrepareForHomeMenu(); }   /* v0.7.14: the HOME menu streams next */
                             end = StreamEnd::GameGone;
                             break;
                         }
@@ -6954,7 +6961,7 @@ namespace ams::mitm::applet {
                             /* Free the 42 MB donor before SwitchU Album inits,
                              * and hold re-setup so a connected viewer does not
                              * remount it mid-handoff. */
-                            PrepareForHomeMenu();
+                            if (!g_ui_stream_armed) { PrepareForHomeMenu(); }   /* v0.7.14: the HOME menu streams next */
                             end = StreamEnd::GameGone;
                             break;
                         }

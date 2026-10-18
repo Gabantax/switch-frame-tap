@@ -342,6 +342,23 @@ running) the donor watch and the setup gate stop only for a web applet
 login - checked when the pool grows 32 MB) or a pool within 48 MB of full;
 game sessions keep the old rule.
 
+**test3 run (`logs/v0714-test3`):** no stream at boot - RunVicBlit still
+returned at once without a game's buffers (`!g_game_surface.armed`), so the
+boot kick did nothing. Sphaira (a forwarder, 05446530aca7e000) streamed;
+HOME -> the HOME menu streamed (layer 0xb, 60 fps); closing sphaira ended it
+("a game is on screen" - its last presents) and then **every session, UI
+and game alike, failed: "slot pin returned 0"**. Sphaira's buffers had held
+the channel's low device addresses; once vi unmapped them, our slot buffer
+mapped at 0. MapCmdBuffer's v0.7.1 recovery mapped the guard page *while
+ours still held 0* - the guard landed above it (0x880000, 0x8a0000, ...),
+the retry never ran, and the slot was refused until reboot. A latent bug for
+game streaming too (any homebrew app, then a game).
+
+**test4:** the recovery unmaps ours first, then the guard takes 0, then ours
+maps again; RunVicBlit runs without a game when home_menu is on; HOME in a
+game with home_menu on goes straight to the HOME-menu session (no donor
+release and 5 s hold - test3 took 8 s).
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

@@ -660,12 +660,13 @@ namespace ams::mitm::applet {
 
         bool NvmapFree(u32 fd, u32 handle);
 
-        /* v0.7.14: before a session pins its buffers, a guard page first. A
+        /* v0.7.13.1: before a session pins its buffers, a guard page first. A
          * hole at device address 0 opens when another process's buffers that
-         * held it go away (a homebrew app closing, test3): the guard fills it
-         * and stays; with 0 held already it is not needed and goes again.
-         * (Moving our own mapping off 0 afterwards does not work: an unmapped
-         * handle keeps its address until freed - test4.) */
+         * held it go away (a homebrew app closing): the guard fills it and
+         * stays; with 0 held already it is not needed and goes again. Without
+         * it the slot copy could land on 0, which the VIC hangs on - a black
+         * picture until a reboot. (Moving our own mapping off 0 afterwards
+         * does not work: an unmapped handle keeps its address until freed.) */
         void HoldDeviceZero(u32 chan_fd) {
             if (g_guard_nvmap_fd == 0 || g_vic_heap == 0 || g_guard_next >= 0x10000) { return; }
             u32 gh = 0, gid = 0;
@@ -5692,7 +5693,7 @@ namespace ams::mitm::applet {
                 }
                 nvfd = nvmap_fd;
                 ++g_capture_handles;
-                HoldDeviceZero(vfd);   /* v0.7.14 */
+                HoldDeviceZero(vfd);   /* v0.7.13.1 */
                 MapCmdBuffer(vfd, sh, std::addressof(slot_vic), "nvf-slot", 0);
                 if (slot_vic == 0) { LogLine("   %s: slot pin returned 0 - refusing", who); return false; }
 

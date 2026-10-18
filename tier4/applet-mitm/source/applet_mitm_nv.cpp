@@ -650,6 +650,33 @@ namespace ams::mitm::applet {
             NvIoctl(chan_fd, NvHostIocChannelUnmapCmdBuf, std::addressof(a), sizeof(a), std::addressof(nverr));
         }
 
+        bool NvmapFree(u32 fd, u32 handle);
+
+        /* v0.7.13.1: before a session pins its buffers, a guard page first. A
+         * hole at device address 0 opens when another process's buffers that
+         * held it go away (a homebrew app closing): the guard fills it and
+         * stays; with 0 held already it is not needed and goes again. Without
+         * it the slot copy could land on 0, which the VIC hangs on - a black
+         * picture until a reboot. (Moving our own mapping off 0 afterwards
+         * does not work: an unmapped handle keeps its address until freed.) */
+        void HoldDeviceZero(u32 chan_fd) {
+            if (g_guard_nvmap_fd == 0 || g_vic_heap == 0 || g_guard_next >= 0x10000) { return; }
+            u32 gh = 0, gid = 0;
+            if (R_FAILED(NvmapOwn(g_guard_nvmap_fd, reinterpret_cast<u8 *>(g_vic_heap + g_guard_next), 0x1000, 0, std::addressof(gh), std::addressof(gid), false))) { return; }
+            MapCmdBufArgs a = {};
+            a.num_handles  = 1;
+            a.handle_id_in = gh;
+            u32 nverr = 0;
+            const ::Result rc = NvIoctl(chan_fd, NvHostIocChannelMapCmdBuf, std::addressof(a), sizeof(a), std::addressof(nverr));
+            if (R_SUCCEEDED(rc) && nverr == 0 && a.phys_addr_out == 0) {
+                g_guard_next += 0x1000;
+                LogLine("   device address 0 was free - a guard page holds it now");
+                return;
+            }
+            if (R_SUCCEEDED(rc) && nverr == 0) { UnmapCmdBuffer(chan_fd, gh); }
+            static_cast<void>(NvmapFree(g_guard_nvmap_fd, gh));
+        }
+
         /* CREATE + ALLOC(kind, our cpu pages) + GET_ID for a buffer we own. */
         ::Result NvmapOwn(u32 fd, void *cpu, u32 size, u8 kind, u32 *out_handle, u32 *out_id, bool cacheable) {
             u32 nverr = 0;
@@ -5571,6 +5598,7 @@ namespace ams::mitm::applet {
                 }
                 nvfd = nvmap_fd;
                 ++g_capture_handles;
+                HoldDeviceZero(vfd);   /* v0.7.13.1 */
                 MapCmdBuffer(vfd, sh, std::addressof(slot_vic), "nvf-slot", 0);
                 if (slot_vic == 0) { LogLine("   %s: slot pin returned 0 - refusing", who); return false; }
 

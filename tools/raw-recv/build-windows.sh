@@ -26,12 +26,13 @@ mkdir -p "$B"
 
 # the icon (from the same SVG as the Linux launcher) and the version resource
 convert -background none -density 384 "$REPO/tools/raw-recv/switch-frame-tap.svg" -define icon:auto-resize=256,64,48,32,16 "$B/switch-frame-tap.ico"
-IFS=. read -r V1 V2 V3 <<< "${VER%%-*}"   # numbers only: 0.7.11-test1 -> 0,7,11
+IFS=. read -r V1 V2 V3 V4 <<< "${VER%%-*}"   # numbers only: 0.7.11-test1 -> 0,7,11,0; 0.7.13.1 -> 0,7,13,1
+V4="${V4:-0}"
 cat > "$B/raw-view.rc" <<RC
 1 ICON "switch-frame-tap.ico"
 1 VERSIONINFO
-FILEVERSION $V1,$V2,$V3,0
-PRODUCTVERSION $V1,$V2,$V3,0
+FILEVERSION $V1,$V2,$V3,$V4
+PRODUCTVERSION $V1,$V2,$V3,$V4
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN

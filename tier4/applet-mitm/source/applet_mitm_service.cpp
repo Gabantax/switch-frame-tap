@@ -173,6 +173,17 @@ namespace ams::mitm::applet {
             UiNoteTransaction(m_client_info.program_id.value, session_id, code, parcel_in.GetPointer(), parcel_in.GetSize());
             R_RETURN(sm::mitm::ResultShouldForwardToSession());
         }
+        GameBinderTransaction(m_client_info, session_id, code, flags, parcel_in.GetPointer(), parcel_in.GetSize(), parcel_out.GetSize());
+        R_RETURN(sm::mitm::ResultShouldForwardToSession());
+    }
+
+    /* v0.7.14: a game's binder transaction - through vi:u's relay, vi:m's (homebrew,
+     * hbmenu) or dispdrv (the Album) */
+    void GameBinderTransaction(const sm::MitmProcessInfo &ci, s32 session_id, u32 code, u32 flags, const void *in_ptr, size_t in_size, size_t out_size) {
+        struct InView { const void *p; size_t n; const void *GetPointer() const { return p; } size_t GetSize() const { return n; } };
+        const InView parcel_in{ in_ptr, in_size };
+        const struct { size_t n; size_t GetSize() const { return n; } } parcel_out{ out_size };
+        const bool album = IsAlbumProgram(ci.program_id.value);
         const u32 total = g_txn_total.fetch_add(1) + 1;
         const u32 per   = (code < 16) ? (g_txn_per_code[code].fetch_add(1) + 1) : 0;
         g_stats.txns.store(total, std::memory_order_relaxed);
@@ -181,7 +192,7 @@ namespace ams::mitm::applet {
         if (per <= 3 || (total % 600) == 0) {
             LogLine("*** binder txn #%u  program=%016llx  session=%d  code=%u(%s) x%u  flags=0x%x  in=%zu out=%zu",
                     total,
-                    static_cast<unsigned long long>(m_client_info.program_id.value),
+                    static_cast<unsigned long long>(ci.program_id.value),
                     session_id, code, TxnName(code), per, flags,
                     parcel_in.GetSize(), parcel_out.GetSize());
         }
@@ -192,7 +203,8 @@ namespace ams::mitm::applet {
          * on untouched (0 = the watcher has not seen an application yet). */
         {
             const u64 ap = g_app_pid.load(std::memory_order_relaxed);
-            if (ap != 0 && ap != m_client_info.process_id.value) { R_RETURN(sm::mitm::ResultShouldForwardToSession()); }
+            /* v0.7.14: and the Album / hbmenu, in front of a suspended game */
+            if (ap != 0 && ap != ci.process_id.value && !album) { return; }
         }
 
         /* SET_PREALLOCATED_BUFFER (14) carries a flattened NvGraphicBuffer in
@@ -209,7 +221,7 @@ namespace ams::mitm::applet {
                 char tag[48];
                 std::snprintf(tag, sizeof(tag), "setPreallocatedBuffer#%u slot %d", per, pslot);
                 LogGraphicBuffer(tag, gb);
-                CaptureGameSurface(gb, pslot);
+                if (album) { CaptureAppletSurface(gb, pslot); } else { CaptureGameSurface(gb, pslot); }
             } else {
                 LogLine("    (no NvGraphicBuffer magic found in %zu-byte parcel)", parcel_in.GetSize());
             }
@@ -252,9 +264,11 @@ namespace ams::mitm::applet {
             }
             /* v0.7.14: while the HOME menu streams, a game's presents only
              * say that the game is back (the UI session ends on that) */
+            if (album) { g_applet_target_pid.store(ci.process_id.value, std::memory_order_relaxed); }
             if (g_ui_session_active.load(std::memory_order_relaxed)) {
                 g_game_presented_in_ui.store(true, std::memory_order_relaxed);
             } else {
+                g_present_pid.store(ci.process_id.value, std::memory_order_relaxed);
                 RecordPresent(qs, have_fence, fn, fv, xf, crop);
             }
         }
@@ -275,8 +289,6 @@ namespace ams::mitm::applet {
                 RequestVicBlit(qslot);
             }
         }
-
-        R_RETURN(sm::mitm::ResultShouldForwardToSession());
     }
 
     /* v0.7.13: the forward service, closed with its last reference. These

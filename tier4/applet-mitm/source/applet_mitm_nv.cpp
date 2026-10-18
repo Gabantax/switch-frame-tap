@@ -59,6 +59,12 @@
 namespace ams::mitm::applet {
 
     constinit GameSurface g_game_surface = {};
+    constinit GameSurface g_applet_surface = {};   /* v0.7.14 */
+    constinit std::atomic<u64> g_applet_target_pid{0};
+    constinit std::atomic<u64> g_present_pid{0};
+    /* the record a running session's geometry came from: a new buffer set
+     * there restarts it (the game's, or v0.7.14 the Album's / hbmenu's) */
+    constinit const GameSurface *g_session_surface = &g_game_surface;
     constinit bool g_vic_armed   = false;
     constinit bool g_vic_execute = false;
     constinit std::atomic<const char *> g_vic_stage{"idle"};
@@ -1534,7 +1540,8 @@ namespace ams::mitm::applet {
     constinit std::atomic<bool> g_streaming_now{false};
     constinit std::atomic<u32>  g_live_w{0}, g_live_h{0}, g_live_fps_x10{0}, g_live_game_fps_x10{0}, g_live_sessions{0};
 
-    void CaptureGameSurface(const NvGraphicBufferRaw *gb, s32 slot_arg) {
+    namespace {
+    void CaptureInto(GameSurface &surf, const char *who, const NvGraphicBufferRaw *gb, s32 slot_arg) {
         if (gb == nullptr || gb->num_planes == 0) { return; }
         const NvSurfaceRaw *p0 = std::addressof(gb->planes[0]);
 
@@ -1544,36 +1551,40 @@ namespace ams::mitm::applet {
         /* v0.7.1: slot 0 starts a set. A different nvmap id alone no longer
          * does - Minecraft registers each slot from its own buffer object, and
          * the old rule restarted the set at every slot. */
-        if (slot_arg == 0 || (slot_arg < 0 && static_cast<u32>(gb->nvmap_id) != g_game_surface.nvmap_id)) {
-            for (auto &o : g_game_surface.slot_offset) { o = 0; }
-            for (auto &o : g_game_surface.slot_nvmap) { o = 0; }
-            g_game_surface.num_slots = 0;
-            ++g_game_surface.generation;
+        if (slot_arg == 0 || (slot_arg < 0 && static_cast<u32>(gb->nvmap_id) != surf.nvmap_id)) {
+            for (auto &o : surf.slot_offset) { o = 0; }
+            for (auto &o : surf.slot_nvmap) { o = 0; }
+            surf.num_slots = 0;
+            ++surf.generation;
         }
-        const u32 slot = (slot_arg >= 0 && slot_arg < 8) ? static_cast<u32>(slot_arg) : g_game_surface.num_slots;
+        const u32 slot = (slot_arg >= 0 && slot_arg < 8) ? static_cast<u32>(slot_arg) : surf.num_slots;
         if (slot < 8) {
-            g_game_surface.slot_offset[slot] = p0->offset;
-            g_game_surface.slot_nvmap[slot]  = static_cast<u32>(gb->nvmap_id);
-            if (slot + 1 > g_game_surface.num_slots) { g_game_surface.num_slots = slot + 1; }
+            surf.slot_offset[slot] = p0->offset;
+            surf.slot_nvmap[slot]  = static_cast<u32>(gb->nvmap_id);
+            if (slot + 1 > surf.num_slots) { surf.num_slots = slot + 1; }
         }
-        g_game_surface.buf_size     = gb->total_size;
-        g_game_surface.color_format = p0->color_format;
-        g_game_surface.layout       = p0->layout;
-        g_game_surface.nvmap_id     = static_cast<u32>(gb->nvmap_id);
-        g_game_surface.width        = p0->width;
-        g_game_surface.height       = p0->height;
-        g_game_surface.stride_px    = p0->pitch / 4;
-        g_game_surface.block_h_log2 = p0->block_height_log2;
+        surf.buf_size     = gb->total_size;
+        surf.color_format = p0->color_format;
+        surf.layout       = p0->layout;
+        surf.nvmap_id     = static_cast<u32>(gb->nvmap_id);
+        surf.width        = p0->width;
+        surf.height       = p0->height;
+        surf.stride_px    = p0->pitch / 4;
+        surf.block_h_log2 = p0->block_height_log2;
         /* NvColorFormat -> VIC pixel format. A8B8G8R8 is the swapchain default. */
-        g_game_surface.pix_format   = (p0->color_format == 0x0100D12120ULL)
+        surf.pix_format   = (p0->color_format == 0x0100D12120ULL)
                                     ? vic::PIXFMT_A8R8G8B8 : vic::PIXFMT_A8B8G8R8;
-        g_game_surface.armed        = true;
+        surf.armed        = true;
 
-        LogLine("   captured slot %u: nvmap=%u %ux%u stride_px=%u blk_h_log2=%u off=0x%x pixfmt=%u (slots=%u)",
-                slot, g_game_surface.nvmap_id, g_game_surface.width, g_game_surface.height,
-                g_game_surface.stride_px, g_game_surface.block_h_log2, p0->offset,
-                g_game_surface.pix_format, g_game_surface.num_slots);
+        LogLine("   captured %s slot %u: nvmap=%u %ux%u stride_px=%u blk_h_log2=%u off=0x%x pixfmt=%u (slots=%u)",
+                who, slot, surf.nvmap_id, surf.width, surf.height,
+                surf.stride_px, surf.block_h_log2, p0->offset,
+                surf.pix_format, surf.num_slots);
     }
+    }
+
+    void CaptureGameSurface(const NvGraphicBufferRaw *gb, s32 slot_arg) { CaptureInto(g_game_surface, "game", gb, slot_arg); }
+    void CaptureAppletSurface(const NvGraphicBufferRaw *gb, s32 slot_arg) { CaptureInto(g_applet_surface, "applet", gb, slot_arg); }
 
     namespace {
 
@@ -2827,6 +2838,7 @@ namespace ams::mitm::applet {
             LogLine("   live[%u]: the HOME menu / applets - attached to vi (pid %llu), held %llu us, %u attach events", sessions,
                     static_cast<unsigned long long>(vpid), static_cast<unsigned long long>(held_us), nev);
             g_game_presented_in_ui.store(false, std::memory_order_relaxed);
+            g_session_surface = std::addressof(g_game_surface);   /* ug's generation is the game's */
             g_ui_session_active.store(true, std::memory_order_relaxed);
             StreamEnd end = StreamEnd::Failed;
             if (UiSourceStart(dbg, vpid, base)) {
@@ -2919,14 +2931,29 @@ namespace ams::mitm::applet {
                 ::ams::os::ProcessId pid{};
                 const u32 q_before = g_queue_count.load(std::memory_order_relaxed);
                 const bool have_app = g_pmdmnt_rc == 0 && R_SUCCEEDED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid)));
-                if (have_app && pid.value != skip_pid) {
+                /* v0.7.14: the Album / hbmenu draws with buffers of its own, like a game */
+                const u64 applet_pid = g_ui_stream_armed ? g_applet_target_pid.load(std::memory_order_relaxed) : 0;
+                if ((have_app && pid.value != skip_pid) || applet_pid != 0) {
                     /* presenting? a suspended or loading-from-boot game is not */
                     os::SleepThread(TimeSpan::FromMilliSeconds(200));
                 }
-                const bool presenting = g_queue_count.load(std::memory_order_relaxed) != q_before;
+                bool presenting = g_queue_count.load(std::memory_order_relaxed) != q_before;
+                /* v0.7.14: whose frames they were - the Album in front of a
+                 * suspended game presents, the game does not */
+                bool applet_target = false;
+                if (presenting && applet_pid != 0) {
+                    const u64 presenter = g_present_pid.load(std::memory_order_relaxed);
+                    if (presenter == applet_pid && (!have_app || presenter != pid.value)) {
+                        pid.value = applet_pid;
+                        applet_target = true;
+                    } else if (!have_app || presenter != pid.value) {
+                        presenting = false;
+                    }
+                }
+                const bool have_target = have_app || applet_target;
                 /* v0.1.1b: an app on the never-attach list (anti-debug builds
                  * such as TiCo refuse to run under a debugger) */
-                if (have_app && g_app_excluded.load(std::memory_order_relaxed)) {
+                if (have_app && !applet_target && g_app_excluded.load(std::memory_order_relaxed)) {
                     g_live_state.store(LiveState_Excluded, std::memory_order_relaxed);
                     SetViewerReason(ViewerReason_Excluded);
                     if (!said_wait_game) { LogLine("   live: %016llx is excluded - not attaching", static_cast<unsigned long long>(g_app_tid.load())); VicStage("live:excluded"); said_wait_game = true; }
@@ -2934,7 +2961,7 @@ namespace ams::mitm::applet {
                     os::SleepThread(TimeSpan::FromMilliSeconds(500));
                     continue;
                 }
-                if (!have_app || pid.value == skip_pid || !presenting) {
+                if (!have_target || pid.value == skip_pid || !presenting) {
                     /* v0.7.14: the HOME menu or an applet instead (home_menu = 1) */
                     if (g_ui_stream_armed && RunUiSession(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, sessions)) {
                         said_wait_game = false;
@@ -2993,11 +3020,14 @@ namespace ams::mitm::applet {
                  * parcels described it; a consistent copy (the binder thread
                  * writes it) */
                 GameSurface geo;
+                const GameSurface &src_surface = applet_target ? g_applet_surface : g_game_surface;
+                g_session_surface = std::addressof(src_surface);
                 for (u32 tries = 0; tries < 10; ++tries) {
-                    const u32 gen = g_game_surface.generation;
-                    geo = g_game_surface;
-                    if (gen == g_game_surface.generation) { break; }
+                    const u32 gen = src_surface.generation;
+                    geo = src_surface;
+                    if (gen == src_surface.generation) { break; }
                 }
+                if (applet_target) { LogLine("   live[%u]: the Album / hbmenu is in front (pid %llu)", sessions, static_cast<unsigned long long>(pid.value)); }
                 u64 slot_base = 0;
                 const u64 f0 = armTicksToNs(armGetSystemTick());
                 const bool found = LocateSwapchain(dbg, geo, std::addressof(slot_base), "live");
@@ -6533,7 +6563,7 @@ namespace ams::mitm::applet {
                         }
                     }
                 }
-                if (geo != nullptr && g_game_surface.generation != geo->generation) { why = "the game made new frame buffers"; end = StreamEnd::Reconfigure; break; }
+                if (geo != nullptr && g_session_surface->generation != geo->generation) { why = "the game made new frame buffers"; end = StreamEnd::Reconfigure; break; }
                 if (g_uvc_new_consumer.exchange(false, std::memory_order_relaxed)) {
                     u32 nw = 0, nh = 0;
                     UvcFrameSize(std::addressof(nw), std::addressof(nh));
@@ -6990,7 +7020,7 @@ namespace ams::mitm::applet {
                 }
                 /* v0.7.1: the game made new frame buffers (Minecraft loading a
                  * world): the ones we read are gone - start over on the new set */
-                if (live && geo != nullptr && g_game_surface.generation != geo->generation) { why = "the game made new frame buffers"; end = StreamEnd::Reconfigure; break; }
+                if (live && geo != nullptr && g_session_surface->generation != geo->generation) { why = "the game made new frame buffers"; end = StreamEnd::Reconfigure; break; }
                 /* v0.4 webcam: a new commit starts from an IDR - or restarts the
                  * stream at the new size; a dropped frame breaks the P chain */
                 if (uvc) {

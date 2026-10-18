@@ -407,6 +407,19 @@ game-like, needs the hbl applet as a stream target), sound outside games
 (grc:d is the game's only), the frame at the user picker's switch. The
 address-0 guard (HoldDeviceZero) fixes a bug in v0.7.13 releases too.
 
+**test7 (the Album and hbmenu, with home_menu on):** both draw with
+buffers of their own and present like a game - hbmenu (the Album's id
+0x010000000000100D under hbl) through vi:m, the real Album through dispdrv.
+vi:m's mitm now takes hbmenu; dispdrv is wrapped in normal builds for the
+Album only (not hbl). Their binder traffic goes through the game handler
+(GameBinderTransaction, out of BinderMitm), with two changes: the Album's
+buffers go into their own record (g_applet_surface, so a suspended game's
+geometry survives it) and its pid is remembered (g_applet_target_pid); every
+recorded present notes its process (g_present_pid). RunLive samples 200 ms
+and attaches to whichever process presented - the game, or the Album in
+front of a suspended one; a session restarts on a new buffer set in its own
+record (g_session_surface).
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

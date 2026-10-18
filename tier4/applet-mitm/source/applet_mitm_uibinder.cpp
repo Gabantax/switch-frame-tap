@@ -3,6 +3,7 @@
 #include <cstring>
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_gbuf.hpp"
+#include "applet_mitm_service.hpp"
 
 namespace ams::mitm::applet {
 
@@ -174,8 +175,15 @@ namespace ams::mitm::applet {
 
     }
 
+    constinit std::atomic<bool> g_ui_dispdrv_probe{false};
+
     Result UiBinderMitm::TransactParcel(s32 binder_id, u32 code, u32 flags, const sf::InBuffer &parcel_in, const sf::OutBuffer &parcel_out) {
         const u64 tid = m_client_info.program_id.value;
+        /* v0.7.14: the Album - its frames feed the stream like a game's */
+        if (IsAlbumProgram(tid)) {
+            GameBinderTransaction(m_client_info, binder_id, code, flags, parcel_in.GetPointer(), parcel_in.GetSize(), parcel_out.GetSize());
+            R_RETURN(sm::mitm::ResultShouldForwardToSession());
+        }
         Note(tid, binder_id, code, parcel_in.GetPointer(), parcel_in.GetSize());
         if (code == 14) {
             if (const auto *gb = FindGraphicBuffer(parcel_in.GetPointer(), parcel_in.GetSize()); gb != nullptr) {
@@ -195,6 +203,10 @@ namespace ams::mitm::applet {
 
     Result UiBinderMitm::TransactParcelAuto(s32 binder_id, u32 code, u32 flags, const sf::InAutoSelectBuffer &parcel_in, const sf::OutAutoSelectBuffer &parcel_out) {
         const u64 tid = m_client_info.program_id.value;
+        if (IsAlbumProgram(tid)) {
+            GameBinderTransaction(m_client_info, binder_id, code, flags, parcel_in.GetPointer(), parcel_in.GetSize(), parcel_out.GetSize());
+            R_RETURN(sm::mitm::ResultShouldForwardToSession());
+        }
         Note(tid, binder_id, code, parcel_in.GetPointer(), parcel_in.GetSize());
         if (code == 14) {
             if (const auto *gb = FindGraphicBuffer(parcel_in.GetPointer(), parcel_in.GetSize()); gb != nullptr) {
@@ -302,7 +314,7 @@ namespace ams::mitm::applet {
 
     Result UiBinderMitm::AdjustRefcount(s32 binder_id, s32 add, s32 type) {
         static constinit u32 s_logged = 0;
-        if (s_logged++ < 48) {
+        if (!IsAlbumProgram(m_client_info.program_id.value) && s_logged++ < 48) {
             LogLine("ui binder %d (%016llx): AdjustRefcount %+d type %d", binder_id, static_cast<unsigned long long>(m_client_info.program_id.value), add, type);
         }
         R_RETURN(sm::mitm::ResultShouldForwardToSession());
@@ -310,7 +322,7 @@ namespace ams::mitm::applet {
 
     Result UiBinderMitm::GetNativeHandle(s32 binder_id, u32 what) {
         static constinit u32 s_logged = 0;
-        if (s_logged++ < 48) {
+        if (!IsAlbumProgram(m_client_info.program_id.value) && s_logged++ < 48) {
             LogLine("ui binder %d (%016llx): GetNativeHandle what %u", binder_id, static_cast<unsigned long long>(m_client_info.program_id.value), what);
         }
         R_RETURN(sm::mitm::ResultShouldForwardToSession());

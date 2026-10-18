@@ -45,6 +45,16 @@ namespace ams::mitm::applet {
      * count), or -1 if it could not be parsed. */
     void CaptureGameSurface(const NvGraphicBufferRaw *gb, s32 slot);
 
+    /* v0.7.14: the Album / hbmenu (an applet with buffers of its own, like a
+     * game's) - its geometry apart, so a suspended game's survives it */
+    extern GameSurface g_applet_surface;
+    void CaptureAppletSurface(const NvGraphicBufferRaw *gb, s32 slot);
+    /* the Album's process (hbmenu or the real one) once it sent a frame, and
+     * the process whose present was recorded last */
+    extern std::atomic<u64> g_applet_target_pid;
+    extern std::atomic<u64> g_present_pid;
+    inline bool IsAlbumProgram(u64 tid) { return tid == UINT64_C(0x010000000000100D); }
+
     /* Opt-in gates, parsed once at startup from sdmc:/applet-mitm.armed:
      *   "vic"        -> g_vic_armed:   run the probe at all
      *   "exec"       -> g_vic_execute: push the real VIC blit (Phase B) rather

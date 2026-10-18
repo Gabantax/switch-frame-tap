@@ -126,7 +126,8 @@ namespace ams {
          * is the real service), and its pointer buffer: a mitm session's
          * must be at least as large or libstratosphere aborts on accept */
         void StartUiBinderMitm() {
-            if (!mitm::applet::UiProbeOn()) { return; }
+            /* v0.7.14: dispdrv also for the Album with home_menu on */
+            if (!mitm::applet::UiProbeOn() && !mitm::applet::g_ui_stream_armed) { return; }
             ::Service dd = {};
             ::Result rc = 0;
             {
@@ -137,12 +138,15 @@ namespace ams {
             mitm::applet::LogLine("uiprobe: dispdrv opened, its pointer buffer %#x (ours %#zx)", static_cast<unsigned>(dd.pointer_buffer_size), UiServerOptions::PointerBufferSize);
             mitm::applet::UiProbeSetDispdrv(dd);
             bool any = false;
-            if (!mitm::applet::UiProbeWants("dispdrv")) {
+            const bool probe_dd = mitm::applet::UiProbeWants("dispdrv");
+            if (!probe_dd && !mitm::applet::g_ui_stream_armed) {
                 mitm::applet::LogLine("uiprobe: dispdrv mitm off (nodispdrv)");
             } else if (dd.pointer_buffer_size > UiServerOptions::PointerBufferSize) {
                 mitm::applet::LogLine("uiprobe: dispdrv's pointer buffer is larger than ours - not wrapping it");
             } else {
+                mitm::applet::g_ui_dispdrv_probe.store(probe_dd);
                 SFT_ABORT_UNLESS(g_ui_server_manager.RegisterMitmServer<mitm::applet::UiBinderMitm>(UiPortIndex_Dispdrv, DispdrvServiceName));
+                mitm::applet::LogLine("dispdrv wrapped for %s", probe_dd ? "the probe (HOME-menu processes) and the Album" : "the Album (home_menu)");
                 any = true;
             }
             /* probe4: the library applets' vi (vi:s here, vi:m in the vi
@@ -1088,7 +1092,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14-test6: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.14-test7: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

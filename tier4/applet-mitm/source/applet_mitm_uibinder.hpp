@@ -113,11 +113,20 @@ namespace ams::mitm::applet {
     /* a binder transaction from the HOME menu or an applet through vi's relay */
     void UiNoteTransaction(u64 tid, s32 id, u32 code, const void *in, size_t in_size);
 
+    /* dispdrv is wrapped for the probe (every HOME-menu process) and, v0.7.14,
+     * with home_menu on, for the Album (its own buffers, presented like a game's) */
+    extern std::atomic<bool> g_ui_dispdrv_probe;
+    extern bool g_ui_stream_armed;
+
     class UiBinderMitm : public sf::MitmServiceImplBase {
         public:
             using MitmServiceImplBase::MitmServiceImplBase;
             /* program id only - no IPC here (see g_app_pid) */
-            static bool ShouldMitm(const sm::MitmProcessInfo &client_info) { return IsUiProgram(client_info.program_id.value); }
+            static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
+                const u64 tid = client_info.program_id.value;
+                if (g_ui_dispdrv_probe.load(std::memory_order_relaxed) && IsUiProgram(tid)) { return true; }
+                return g_ui_stream_armed && tid == UINT64_C(0x010000000000100D) && !client_info.override_status.IsHbl();
+            }
         public:
             Result TransactParcel(s32 binder_id, u32 code, u32 flags, const sf::InBuffer &parcel_in, const sf::OutBuffer &parcel_out);
             Result AdjustRefcount(s32 binder_id, s32 add, s32 type);

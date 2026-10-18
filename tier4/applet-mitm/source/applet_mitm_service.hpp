@@ -34,6 +34,7 @@
 #pragma once
 #include <stratosphere.hpp>
 #include "applet_mitm_uibinder.hpp"
+#include "applet_mitm_uisource.hpp"
 
 namespace ams::mitm::applet {
     struct DisplayName { char data[0x40]; };
@@ -125,6 +126,10 @@ namespace ams::mitm::applet {
     };
     static_assert(IsIViRootMitm<ViRootMitm>);
 
+    /* a game's binder transaction (queueBuffer, setPreallocatedBuffer...) -
+     * vi:u's or vi:m's relay, or v0.7.14 dispdrv for the Album */
+    void GameBinderTransaction(const sm::MitmProcessInfo &ci, s32 session_id, u32 code, u32 flags, const void *in, size_t in_size, size_t out_size);
+
     /* shared by the vi:u and vi:m roots: forward a root command that returns
      * the display service, and wrap what it returns */
     Result ForwardGetDisplayService(::Service *fwd, u32 cmd, u32 mode, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out);
@@ -164,7 +169,9 @@ namespace ams::mitm::applet {
                 const bool app_range = tid >= UINT64_C(0x0100000000010000) && (tid >> 56) != 0x42;
                 /* v0.7.14 probe4: and the library applets, with probe-ui.txt */
                 const bool applet = g_ui_vi_mitm.load(std::memory_order_relaxed) && IsLibraryApplet(tid);
-                return app_range || applet || IsRunningApplication(client_info.process_id);
+                /* v0.7.14: and hbmenu - the homebrew loader in the Album's place - with home_menu on */
+                const bool hbmenu = g_ui_stream_armed && tid == UINT64_C(0x010000000000100D) && client_info.override_status.IsHbl();
+                return app_range || applet || hbmenu || IsRunningApplication(client_info.process_id);
             }
         public:
             Result GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode);

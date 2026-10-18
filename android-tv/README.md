@@ -1,62 +1,50 @@
-# Switch Frame Tap TV - preview 0.1.2
+# Switch Frame Tap for Android and Android TV
 
-An **Android TV / Google TV viewer for Android 6.0 (API 23) and later**. It receives
-H.264 video and PCM audio directly from Switch Frame Tap over a local network or
-USB. The controller remains connected to the Switch; this app only receives and
-plays video and audio. All application labels, status messages, and diagnostics
-are in English.
+An **Android / Android TV / Google TV viewer for Android 6.0 (API 23) and later**,
+made by [didix16](https://github.com/didix16). It receives H.264 video and PCM audio
+directly from Switch Frame Tap over the local network or USB, like the PC viewer,
+and looks like it: the same home screen, Settings drawer, colours and typeface. The
+controller stays connected to the Switch; the app only shows and plays the stream.
 
-This is a preview. The build, protocol parsing, and playback-worker regressions
-have been checked on the development machine. An earlier preview connected on a
-Vestel Cosmos running Android 11 but did not display video or play audio. Version
-0.1.1 addressed playback issues reproduced with driver test doubles; confirmation
-on that TV is still pending. Version 0.1.2 translates the interface and documentation
-into English. **Successful playback and end-to-end latency on physical TVs remain
-to be validated.**
+Since Switch Frame Tap 0.7.14 the app ships with each release
+(`switch-frame-tap-<version>-android.apk`) and carries the release's version. It
+has played on a Hisense Android TV (Android 11) over USB; other TVs, phones and
+latency are still being reported, so please tell us how it does on yours.
 
 ## Installation and connection
 
-1. Copy `SwitchFrameTapTV-0.1.2-preview.apk` to the TV or TV box and open it with a
-   file manager that supports APK installation. Allow installation from that file
-   manager when Android asks. The app appears as **Switch Frame Tap TV** in the TV
-   launcher. This preview APK is signed with a development key.
-2. Use the Switch Frame Tap manager on the console to choose the connection mode.
-   Restart the console if requested. Keep the streamer installed and enabled.
-3. **Network:** select Network on both the Switch and TV. Both devices must be on
-   the same local network. Leave the IP address blank for UDP discovery and the
-   last successful address, or enter the address displayed by the console's manager.
-   Select **Connect**. Streaming uses TCP 9950; discovery uses UDP 9951. If the router
-   filters announcements, enter the IP address manually. The app does not scan the subnet.
-4. **USB:** select USB viewer on the Switch and USB on the TV. Connect the Switch's
-   USB-C port directly to a USB host port on the TV with a data cable. Select
-   **Connect** and allow USB access. Webcam/UVC modes are not supported by this
-   receiver. The Switch must be handheld to leave its USB-C port available.
-5. Open a game. The app hides the controls when it starts presenting video. Close
-   the PC viewer first: the streamer supports only one connected viewer.
+1. Download `switch-frame-tap-<version>-android.apk` from the release, copy it to
+   the TV, TV box or phone, and open it with a file manager that can install APKs.
+   Allow installation from that file manager when Android asks. The app appears as
+   **Switch Frame Tap**. (Coming from the 0.1.x preview APK: uninstall it first, it
+   was signed with a different key.)
+2. In the Switch Frame Tap app on the console, set Connection to match (USB - PC
+   viewer, or Network) and restart the console if it asks. Close the PC viewer:
+   the console serves one viewer at a time.
+3. **Network:** choose Network in the app. The Switch and this device must be on the
+   same local network; the Switch can stay docked. Leave the IP address blank and the
+   app finds the Switch (UDP 9951) or uses the last address; otherwise type the
+   address the console's app shows. Streaming uses TCP 9950.
+4. **USB:** choose USB in the app and connect the Switch's USB-C port to a USB host
+   port of the device with a data cable (the Switch in handheld). Allow USB access
+   when Android asks. Webcam modes are not supported by this app.
+5. Select **Connect** and open a game. The picture replaces the home screen; while
+   there is none, the home screen says why, as the console reports it ("Connected -
+   no game is running", ...). The app connects again by itself the next time it opens.
 
-The Switch can remain docked when using Network. Changing the mode in the Android
-app does not change the console configuration; select the matching mode on the
-Switch as well.
+## Controls
 
-## TV remote controls
+- TV remote: the arrows move, OK selects. **Menu** opens Settings anywhere; during
+  the game **OK** and **Back** open it too, and **Back** closes it. On the home
+  screen Back leaves the app.
+- Phone or tablet: tap the gear for Settings, or tap the game.
+- **Settings:** Connection (USB / Network), **Mute** (this device only), **Stable
+  audio** (a 60 ms buffer instead of 20 ms, if the sound drops out - it reconnects),
+  **Stats overlay** (frame rates, bitrate, decoder, dropped frames, sound and the
+  device's audio buffer).
 
-- Use the arrow keys to navigate and OK to select a control.
-- During playback, OK, Menu, or Back opens the controls. While connected, Back
-  closes the controls and returns to the video.
-- **Close panel**, at the top right, hides the controls without disconnecting.
-  This also works without video. The panel stays closed until you open it with
-  OK, Menu, or Back, allowing you to read the full statistics overlay.
-- When disconnected and the panel is open, Back exits the app.
-- **Mute audio** affects playback in the viewer, not the console.
-- **Stable audio** requests a 60 ms buffer instead of 20 ms, subject to the output
-  device's minimum. Leave it off to prioritize lower latency. Changing it restarts
-  the connection and may help with audio dropouts.
-- **Show statistics** displays received, decoded, and presented frame rates;
-  bitrate; decoder selection; dropped frames; incoming audio; playback progress;
-  the TV's actual audio buffer size; and audio focus state.
-
-The app closes the connection and releases audio/USB resources when it goes into
-the background. It reconnects on return if the connection was active.
+The app closes the connection and releases audio and USB when it goes to the
+background, and reconnects when it comes back.
 
 ## Quality and latency
 
@@ -113,8 +101,10 @@ Network reception does not depend on USB host support.
 See [BUILDING.md](BUILDING.md) for requirements, environment setup, SDK installation,
 build commands, tests, and optional distribution packaging.
 
-With JDK 17 and Android SDK Platform 34 / Build Tools 34.0.0 configured, run from
-`android-tv/` on Windows:
+Releases are built by GitHub Actions (`.github/workflows/viewer-android.yml`) on each
+version tag; by hand it can also take screenshots on an Android TV and a phone
+emulator. With JDK 17 and Android SDK Platform 34 / Build Tools 34.0.0 configured, run
+from `android-tv/` on Windows:
 
 ```powershell
 .\gradlew.bat :app:assembleDebug :app:protocolTest :app:playbackTest :app:lintDebug
@@ -147,9 +137,10 @@ See [VALIDATION.md](VALIDATION.md) for completed checks and the pending TV test 
 
 ## Credits and license
 
-Based on the protocol and viewer by **Tomas Uribe**,
+Made by **didix16** (PR #17), based on the protocol and viewer by **Tomas Uribe**,
 [switch-frame-tap](https://github.com/TomasUribe/switch-frame-tap).
 `LICENSE` contains GPL-2.0, and `UPSTREAM-NOTICE` preserves the upstream credits.
+The app bundles DejaVu Sans (`app/src/main/assets/fonts/`, its licence alongside).
 The distribution includes the corresponding source code for the Android viewer.
 
 Official API references:

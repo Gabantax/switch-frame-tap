@@ -126,7 +126,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         root.addView(home, new FrameLayout.LayoutParams(-1, -1));
         // a phone held sideways is ~360 dp tall: the card scrolls there, and sits centred on a TV
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.setVerticalScrollBarEnabled(false);
-        FrameLayout.LayoutParams scl = new FrameLayout.LayoutParams(-1, -1); scl.topMargin = dp(70);
+        FrameLayout.LayoutParams scl = new FrameLayout.LayoutParams(-1, -1); scl.topMargin = dp(64);
         home.addView(scroll, scl);
         FrameLayout centre = new FrameLayout(this);
         scroll.addView(centre, new ScrollView.LayoutParams(-1, -1));
@@ -153,48 +153,35 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
 
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL); column.setGravity(Gravity.CENTER_HORIZONTAL);
-        column.setPadding(0, 0, 0, dp(24));
         FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER);
-        cl.bottomMargin = dp(40);
+        cl.bottomMargin = dp(24);
         centre.addView(column, cl);
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL); card.setGravity(Gravity.CENTER_HORIZONTAL);
         card.setBackground(Ui.round(Ui.SURF, 18));
-        card.setPadding(dp(36), dp(34), dp(36), dp(30));
-        int width = Math.min(dp(640), getResources().getDisplayMetrics().widthPixels - dp(48));
+        card.setPadding(dp(32), dp(26), dp(32), dp(22));
+        int width = Math.min(dp(600), getResources().getDisplayMetrics().widthPixels - dp(48));
         column.addView(card, new LinearLayout.LayoutParams(width, -2));
 
         ring = new Ui.Ring(this);
-        card.addView(ring, new LinearLayout.LayoutParams(dp(44), dp(44)));
-        title = Ui.text(this, "", 27, Ui.INK, true); title.setGravity(Gravity.CENTER);
-        title.setPadding(0, dp(18), 0, dp(10));
+        card.addView(ring, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        title = Ui.text(this, "", 23, Ui.INK, true); title.setGravity(Gravity.CENTER);
+        title.setPadding(0, dp(14), 0, dp(8));
         card.addView(title, new LinearLayout.LayoutParams(-1, -2));
-        detail = Ui.text(this, "", 16, Ui.DIM, false); detail.setGravity(Gravity.CENTER); detail.setLineSpacing(dp(3), 1);
+        detail = Ui.text(this, "", 15, Ui.DIM, false); detail.setGravity(Gravity.CENTER); detail.setLineSpacing(dp(3), 1);
         card.addView(detail, new LinearLayout.LayoutParams(-1, -2));
-        note = Ui.text(this, "", 14, Ui.FAINT, false); note.setGravity(Gravity.CENTER); note.setPadding(0, dp(6), 0, 0);
+        note = Ui.text(this, "", 13, Ui.FAINT, false); note.setGravity(Gravity.CENTER); note.setPadding(0, dp(6), 0, 0);
         card.addView(note, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout segments = segmented(); homeUsb = (Button)segments.getChildAt(0); homeNet = (Button)segments.getChildAt(1);
-        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-2, -2); sl.topMargin = dp(26);
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-2, -2); sl.topMargin = dp(18);
         card.addView(segments, sl);
-
-        ipRow = new LinearLayout(this); ipRow.setOrientation(LinearLayout.VERTICAL); ipRow.setGravity(Gravity.CENTER_HORIZONTAL);
-        ip = new EditText(this);
-        ip.setTextColor(Ui.INK); ip.setHintTextColor(Ui.FAINT); ip.setTypeface(Ui.regular); ip.setTextSize(16);
-        ip.setSingleLine(true); ip.setGravity(Gravity.CENTER);
-        ip.setHint("The Switch's IP address (blank: find it)");
-        ip.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        ip.setText(prefs.getString("ip", "")); ip.setSelectAllOnFocus(true);
-        ip.setBackground(Ui.states(Ui.SURF2, Ui.SURF2, 10)); ip.setPadding(dp(14), dp(10), dp(14), dp(10));
-        LinearLayout.LayoutParams il = new LinearLayout.LayoutParams(dp(360), -2); il.topMargin = dp(14);
-        ipRow.addView(ip, il);
-        card.addView(ipRow, new LinearLayout.LayoutParams(-1, -2));
 
         action = Ui.pill(this, "Connect", true, v -> {
             if (requested) disconnect(); else connect();
         });
-        LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-2, dp(46)); al.topMargin = dp(18);
+        LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-2, dp(42)); al.topMargin = dp(14);
         card.addView(action, al);
 
         if (tv) {
@@ -202,13 +189,9 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
             hints.addView(Ui.keyHint(this, "OK", "Select"));
             hints.addView(Ui.keyHint(this, "Menu", "Settings"));
             hints.addView(Ui.keyHint(this, "Back", "Close"));
-            LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2); hl.topMargin = dp(30);
+            LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2); hl.topMargin = dp(24);
             column.addView(hints, hl);
         }
-        TextView footer = Ui.text(this, "Your controller stays connected to the Switch. Quality and resolution are chosen on the console.", 12, Ui.FAINT, false);
-        footer.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams fl = new LinearLayout.LayoutParams(width, -2); fl.topMargin = dp(tv ? 18 : 22);
-        column.addView(footer, fl);
         action.requestFocus();
     }
 
@@ -219,8 +202,8 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         Button usb = Ui.pill(this, "USB", false, v -> chooseMode(true));
         Button net = Ui.pill(this, "Network", false, v -> chooseMode(false));
         for (Button b : new Button[]{usb, net}) {
-            b.setPadding(dp(18), dp(7), dp(18), dp(7));
-            track.addView(b, new LinearLayout.LayoutParams(-2, dp(36)));
+            b.setPadding(dp(18), 0, dp(18), 0);
+            track.addView(b, new LinearLayout.LayoutParams(-2, dp(34)));
         }
         return track;
     }
@@ -261,7 +244,24 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         LinearLayout seg = segmented(); drawerUsb = (Button)seg.getChildAt(0); drawerNet = (Button)seg.getChildAt(1);
         conn.addView(seg);
         body.addView(conn);
-        ipLabel = Ui.text(this, "", 13, Ui.DIM, false); ipLabel.setPadding(dp(12), 0, dp(12), dp(6));
+        ipRow = new LinearLayout(this); ipRow.setOrientation(LinearLayout.VERTICAL);
+        ipRow.setPadding(dp(12), dp(4), dp(12), dp(4));
+        ipRow.addView(Ui.text(this, "Switch IP address", 16, Ui.INK, false));
+        ip = new EditText(this);
+        ip.setTextColor(Ui.INK); ip.setHintTextColor(Ui.FAINT); ip.setTypeface(Ui.regular); ip.setTextSize(15);
+        ip.setSingleLine(true);
+        ip.setHint("Blank: find it on the network");
+        ip.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        ip.setText(prefs.getString("ip", "")); ip.setSelectAllOnFocus(true);
+        ip.setBackground(Ui.states(Ui.SURF2, Ui.SURF2, 10)); ip.setPadding(dp(14), dp(9), dp(14), dp(9));
+        ip.setOnFocusChangeListener((v, focused) -> {
+            if (!focused) prefs.edit().putString("ip", ip.getText().toString().trim()).apply();
+        });
+        LinearLayout.LayoutParams il = new LinearLayout.LayoutParams(-1, -2); il.topMargin = dp(8);
+        ipRow.addView(ip, il);
+        body.addView(ipRow);
+        ipLabel = Ui.text(this, "", 13, Ui.DIM, false); ipLabel.setPadding(dp(12), dp(6), dp(12), dp(6));
+        ipLabel.setLineSpacing(dp(3), 1);
         body.addView(ipLabel);
 
         section(body, "SOUND");
@@ -286,7 +286,8 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         catch (PackageManager.NameNotFoundException ignored) { }
         TextView about = Ui.text(this, "Switch Frame Tap for Android " + version + "\n"
                 + Build.MANUFACTURER + " " + Build.MODEL + " · Android " + Build.VERSION.RELEASE + "\n"
-                + "GPL-2.0 · github.com/TomasUribe/switch-frame-tap", 13, Ui.DIM, false);
+                + "GPL-2.0 · github.com/TomasUribe/switch-frame-tap\n\n"
+                + "Your controller stays connected to the Switch. Quality and resolution are chosen on the console.", 13, Ui.DIM, false);
         about.setLineSpacing(dp(4), 1); about.setPadding(dp(12), dp(4), dp(12), dp(8));
         body.addView(about);
 
@@ -332,6 +333,10 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private void closeDrawer() {
         if (drawer.getVisibility() != View.VISIBLE) return;
         scrim.setVisibility(View.GONE); drawer.setVisibility(View.GONE);
+        prefs.edit().putString("ip", ip.getText().toString().trim()).apply();
+        InputMethodManager keyboard = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+        if (keyboard != null) keyboard.hideSoftInputFromWindow(ip.getWindowToken(), 0);
+        updateHome();
         if (home.getVisibility() == View.VISIBLE) action.requestFocus();
     }
     private boolean drawerOpen() { return drawer.getVisibility() == View.VISIBLE; }
@@ -351,15 +356,15 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         for (Button b : new Button[]{homeUsb, drawerUsb}) Ui.styleSegment(b, usbMode);
         for (Button b : new Button[]{homeNet, drawerNet}) Ui.styleSegment(b, !usbMode);
         ipRow.setVisibility(usbMode ? View.GONE : View.VISIBLE);
-        ipLabel.setText(usbMode ? "Set Connection to USB on the Switch too (USB - PC viewer)."
-                : "Set Connection to Network on the Switch too. The IP address is on the home screen, under Connect.");
+        ipLabel.setText(usbMode ? "Set Connection to \"USB - PC viewer\" in the Switch Frame Tap app on the Switch too."
+                : "Set Connection to Network in the Switch Frame Tap app on the Switch too; it shows the Switch's IP address.");
         updateHome();
     }
     private void connect() {
         String address = ip.getText().toString().trim();
         if (!usbMode && !address.isEmpty() && !SftProtocol.ipv4(address)) {
             setMessage("That is not an IPv4 address (such as 192.168.1.50). Leave it blank to find the Switch.");
-            ip.requestFocus(); return;
+            openDrawer(); ip.requestFocus(); return;
         }
         InputMethodManager keyboard = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
         if (keyboard != null) keyboard.hideSoftInputFromWindow(ip.getWindowToken(), 0);
@@ -441,7 +446,9 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
             t = "Ready to connect";
             d = usbMode ? "Connect the Switch to this device with a USB-C data cable, in handheld mode."
                         : "The Switch and this device on the same network. Playing docked works.";
-            n = usbMode ? "Playing docked? Choose Network." : "Connecting by cable? Choose USB.";
+            String addr = ip.getText().toString().trim();
+            n = usbMode ? "Playing docked? Choose Network."
+                        : addr.isEmpty() ? "It finds the Switch by itself, or set its address in Settings." : "Connecting to " + addr + " (Settings to change it)";
         } else if (fresh) {
             t = consoleHead.isEmpty() ? "Connected" : consoleHead;
             d = consoleDetail;

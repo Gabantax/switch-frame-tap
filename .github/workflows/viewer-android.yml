@@ -105,7 +105,7 @@ jobs:
             sleep 8; adb exec-out screencap -p > shots/${{ matrix.name }}-1-home.png
             adb shell input keyevent KEYCODE_MENU; sleep 3; adb exec-out screencap -p > shots/${{ matrix.name }}-2-settings.png
             adb shell input keyevent KEYCODE_DPAD_DOWN; adb shell input keyevent KEYCODE_DPAD_DOWN; adb shell input keyevent KEYCODE_DPAD_DOWN; sleep 2; adb exec-out screencap -p > shots/${{ matrix.name }}-3-settings-focus.png
-            adb shell input keyevent KEYCODE_BACK; sleep 2; adb shell input keyevent KEYCODE_DPAD_UP; sleep 1; adb shell input keyevent KEYCODE_DPAD_CENTER; sleep 4; adb exec-out screencap -p > shots/${{ matrix.name }}-4-network.png
+            adb shell input keyevent KEYCODE_BACK; sleep 2; adb shell input keyevent KEYCODE_DPAD_CENTER; sleep 6; adb exec-out screencap -p > shots/${{ matrix.name }}-4-connecting.png
       - uses: actions/upload-artifact@v4
         if: always()
         with:

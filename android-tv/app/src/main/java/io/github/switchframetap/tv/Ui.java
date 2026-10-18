@@ -61,7 +61,8 @@ final class Ui {
         Button b = new Button(c);
         b.setText(label); b.setAllCaps(false); b.setTextSize(15); b.setTypeface(bold);
         b.setMinHeight(0); b.setMinimumHeight(0); b.setMinWidth(0); b.setMinimumWidth(0);
-        b.setPadding(dp(22), dp(10), dp(22), dp(10));
+        b.setPadding(dp(22), 0, dp(22), 0);
+        b.setGravity(Gravity.CENTER); b.setIncludeFontPadding(false);
         b.setStateListAnimator(null);
         stylePill(b, primary);
         b.setOnClickListener(click);

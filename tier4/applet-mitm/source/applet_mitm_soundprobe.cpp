@@ -1,5 +1,5 @@
 /*
- * v0.7.14 sound probe 1: sound outside games. Research only - off unless
+ * v0.7.14 sound probe 2 (1 printed floats - see Milli): sound outside games. Research only - off unless
  * sdmc:/config/switch-frame-tap/probe-sound.txt exists, and left out of
  * release builds (SFT_SOUND_PROBE).
  *
@@ -10,8 +10,8 @@
  * which the system may keep at 0 for the HOME menu and the applets.
  *
  * Per cycle (60 s, 4 cycles, 70 s after start):
- *   log    aud:a record and master volumes of qlaunch and the running game
  *   A 15 s audrec:u final output, as the system has it: peak / non-zero per s
+ *   log    aud:a record and master volumes of qlaunch and the running game
  *   B 15 s the same with qlaunch's record volume raised to 1.0 (read back to
  *          check the request's layout), then restored
  * The first 3 cycles' A and B go to probe/audrec-cN-A.raw / -B.raw (s16
@@ -80,14 +80,22 @@ namespace ams::mitm::applet {
             return serviceDispatchIn(aud, 9, in);
         }
 
+        /* a volume in thousandths, for the log: a stratosphere module has no
+         * newlib heap, and printf's %f needs one (dtoa's Balloc asserts) -
+         * sound1 stopped the console that way */
+        int Milli(float v) { return static_cast<int>(v * 1000.0f + (v < 0 ? -0.5f : 0.5f)); }
+
         void LogVolumes(::Service *aud, const char *when, u64 ql, u64 app) {
             float qr = -1, qm = -1, ar = -1, am = -1;
+            LogLine("soundprobe: %s - reading qlaunch's volumes (pid %llu)", when, static_cast<unsigned long long>(ql));
             const ::Result r1 = GetVolume(aud, 8, ql, &qr);
             const ::Result r2 = GetVolume(aud, 4, ql, &qm);
-            ::Result r3 = 0, r4 = 0;
-            if (app != 0) { r3 = GetVolume(aud, 8, app, &ar); r4 = GetVolume(aud, 4, app, &am); }
-            LogLine("soundprobe: %s - qlaunch (pid %llu) record %.2f (rc=0x%x) master %.2f (rc=0x%x); game (pid %llu) record %.2f (rc=0x%x) master %.2f (rc=0x%x)",
-                    when, static_cast<unsigned long long>(ql), qr, r1, qm, r2, static_cast<unsigned long long>(app), ar, r3, am, r4);
+            LogLine("soundprobe: qlaunch record %d/1000 (rc=0x%x), master %d/1000 (rc=0x%x)", Milli(qr), r1, Milli(qm), r2);
+            if (app != 0) {
+                const ::Result r3 = GetVolume(aud, 8, app, &ar);
+                const ::Result r4 = GetVolume(aud, 4, app, &am);
+                LogLine("soundprobe: game (pid %llu) record %d/1000 (rc=0x%x), master %d/1000 (rc=0x%x)", static_cast<unsigned long long>(app), Milli(ar), r3, Milli(am), r4);
+            }
         }
 
         struct Recorder {
@@ -226,20 +234,11 @@ namespace ams::mitm::applet {
             for (int c = 0; c < 4; ++c) {
                 const u64 ql = PidOf(QlaunchId);
                 const u64 app = g_app_pid.load(std::memory_order_relaxed);
-                ::Service aud = {};
-                ::Result arc = 0;
-                {
-                    SmUse sm;
-                    arc = smGetService(&aud, "aud:a");
-                }
-                if (R_FAILED(arc)) { LogLine("soundprobe: aud:a not opened rc=0x%x", arc); }
                 char tag[48];
                 std::snprintf(tag, sizeof(tag), "cycle %d (%s)", c + 1, app != 0 ? "a game is running" : "no game");
-                if (R_SUCCEEDED(arc)) { LogVolumes(&aud, tag, ql, app); }
-
+                LogLine("soundprobe: %s - opening audrec:u", tag);
                 Recorder r;
                 if (!OpenRecorder(&r)) {
-                    if (R_SUCCEEDED(arc)) { serviceClose(&aud); }
                     os::SleepThread(TimeSpan::FromSeconds(60));
                     continue;
                 }
@@ -248,24 +247,35 @@ namespace ams::mitm::applet {
                 std::snprintf(tag, sizeof(tag), "c%d A", c + 1);
                 Measure(&r, tag, 15000, c < 3 ? path : nullptr);
 
+                LogLine("soundprobe: opening aud:a");
+                ::Service aud = {};
+                ::Result arc = 0;
+                {
+                    SmUse sm;
+                    arc = smGetService(&aud, "aud:a");
+                }
+                if (R_FAILED(arc)) { LogLine("soundprobe: aud:a not opened rc=0x%x", arc); }
+                else { LogVolumes(&aud, tag, ql, app); }
+
                 float before = -1;
                 if (R_SUCCEEDED(arc) && ql != 0 && R_SUCCEEDED(GetVolume(&aud, 8, ql, &before))) {
+                    LogLine("soundprobe: setting qlaunch's record volume (layout %d)", layout);
                     ::Result src = SetRecordVolume(&aud, layout, ql, 1.0f);
                     float now = -1;
                     static_cast<void>(GetVolume(&aud, 8, ql, &now));
-                    LogLine("soundprobe: set qlaunch record volume 1.0 (layout %d) rc=0x%x - reads %.2f (was %.2f)", layout, src, now, before);
+                    LogLine("soundprobe: set qlaunch record volume 1000 (layout %d) rc=0x%x - reads %d (was %d)", layout, src, Milli(now), Milli(before));
                     if (now != 1.0f && layout == 0) {
                         layout = 1;
                         src = SetRecordVolume(&aud, layout, ql, 1.0f);
                         static_cast<void>(GetVolume(&aud, 8, ql, &now));
-                        LogLine("soundprobe: set qlaunch record volume 1.0 (layout %d) rc=0x%x - reads %.2f", layout, src, now);
+                        LogLine("soundprobe: set qlaunch record volume 1000 (layout %d) rc=0x%x - reads %d", layout, src, Milli(now));
                     }
                     std::snprintf(path, sizeof(path), "%s/audrec-c%d-B.raw", ProbeDir, c + 1);
                     std::snprintf(tag, sizeof(tag), "c%d B", c + 1);
                     Measure(&r, tag, 15000, c < 3 ? path : nullptr);
                     const ::Result rrc = SetRecordVolume(&aud, layout, ql, before);
                     static_cast<void>(GetVolume(&aud, 8, ql, &now));
-                    LogLine("soundprobe: qlaunch record volume restored rc=0x%x - reads %.2f", rrc, now);
+                    LogLine("soundprobe: qlaunch record volume restored rc=0x%x - reads %d", rrc, Milli(now));
                 }
                 CloseRecorder(&r);
                 if (R_SUCCEEDED(arc)) { serviceClose(&aud); }

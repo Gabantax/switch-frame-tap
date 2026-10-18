@@ -392,6 +392,21 @@ fewer than 30 + 48 MB are free. With Settings open (~87 MB free without
 us) the donor takes 38 MB and 49 stay free. A game streamed on a capped
 donor may drop to 720p until the engines restart.
 
+**test6 run (`logs/v0714-test6`, recording switch_2026-10-18_01-47-22.mp4) -
+System Settings streams:** opening it the first time released the memory,
+the donor came back capped ("87 MB free - taking at most 39" -> 37 MB,
+capture region 31 MB) and the HOME menu streamed again 1.3 s later; the
+second time the pool stayed at 450 MB (50 free) and nothing paused. MK8
+afterwards streamed normally. Seen in the recording: one grey, blocky frame
+as the user picker opened (a read across the layer switch), black while the
+game loads (the HOME menu fades out). A few single-frame stalls (VIC 52 ms,
+NVENC 83 ms, read 95 ms once each).
+
+**Still open:** the Album and hbmenu (own buffers through dispdrv / vi:m -
+game-like, needs the hbl applet as a stream target), sound outside games
+(grc:d is the game's only), the frame at the user picker's switch. The
+address-0 guard (HoldDeviceZero) fixes a bug in v0.7.13 releases too.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

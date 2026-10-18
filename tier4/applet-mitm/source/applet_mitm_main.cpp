@@ -98,9 +98,11 @@ namespace ams {
          * applet converts its session (vi:u's server has none). */
         enum UiPortIndex {
             UiPortIndex_Dispdrv,
+            UiPortIndex_ViSystem,    /* probe4: vi:s, library applets only */
             UiPortIndex_Count,
         };
         constexpr sm::ServiceName DispdrvServiceName = sm::ServiceName::Encode("dispdrv");
+        constexpr sm::ServiceName ViSystemServiceName = sm::ServiceName::Encode("vi:s");
         struct UiServerOptions {
             static constexpr size_t PointerBufferSize   = 0x3000;   /* probe2: dispdrv's is 0x3000 */
             static constexpr size_t MaxDomains          = 4;
@@ -108,7 +110,7 @@ namespace ams {
             static constexpr bool CanDeferInvokeRequest = false;
             static constexpr bool CanManageMitmServers  = true;
         };
-        constexpr size_t UiMaxSessions = 6;
+        constexpr size_t UiMaxSessions = 12;   /* probe4: an applet's vi:s root, display service, system display service, relay */
         constexpr size_t UiThreads = 3;
         class UiServerManager final : public sf::hipc::ServerManager<UiPortIndex_Count, UiServerOptions, UiMaxSessions> {
             private:
@@ -133,9 +135,41 @@ namespace ams {
             if (R_FAILED(rc)) { mitm::applet::LogLine("uiprobe: dispdrv not opened rc=0x%x - no dispdrv mitm, no binder look", rc); return; }
             mitm::applet::LogLine("uiprobe: dispdrv opened, its pointer buffer %#x (ours %#zx)", static_cast<unsigned>(dd.pointer_buffer_size), UiServerOptions::PointerBufferSize);
             mitm::applet::UiProbeSetDispdrv(dd);
-            if (!mitm::applet::UiProbeWants("dispdrv")) { mitm::applet::LogLine("uiprobe: dispdrv mitm off (nodispdrv)"); return; }
-            if (dd.pointer_buffer_size > UiServerOptions::PointerBufferSize) { mitm::applet::LogLine("uiprobe: dispdrv's pointer buffer is larger than ours - not wrapping it"); return; }
-            SFT_ABORT_UNLESS(g_ui_server_manager.RegisterMitmServer<mitm::applet::UiBinderMitm>(UiPortIndex_Dispdrv, DispdrvServiceName));
+            bool any = false;
+            if (!mitm::applet::UiProbeWants("dispdrv")) {
+                mitm::applet::LogLine("uiprobe: dispdrv mitm off (nodispdrv)");
+            } else if (dd.pointer_buffer_size > UiServerOptions::PointerBufferSize) {
+                mitm::applet::LogLine("uiprobe: dispdrv's pointer buffer is larger than ours - not wrapping it");
+            } else {
+                SFT_ABORT_UNLESS(g_ui_server_manager.RegisterMitmServer<mitm::applet::UiBinderMitm>(UiPortIndex_Dispdrv, DispdrvServiceName));
+                any = true;
+            }
+            /* probe4: the library applets' vi (vi:s here, vi:m in the vi
+             * server) - their shared-layer presents name the slot each frame */
+            if (mitm::applet::UiProbeWants("vi")) {
+                ::Service vs = {};
+                ::Result vrc = 0;
+                {
+                    mitm::applet::SmUse sm_vs;
+                    vrc = ::smGetService(std::addressof(vs), "vi:s");
+                }
+                if (R_FAILED(vrc)) {
+                    mitm::applet::LogLine("uiprobe: vi:s not opened rc=0x%x - applets not wrapped", vrc);
+                } else {
+                    const u32 pbs = static_cast<u32>(vs.pointer_buffer_size);
+                    ::serviceClose(std::addressof(vs));
+                    mitm::applet::LogLine("uiprobe: vi:s pointer buffer %#x (ours %#zx, vi server %#zx)", pbs, UiServerOptions::PointerBufferSize, ServerOptions::PointerBufferSize);
+                    if (pbs <= UiServerOptions::PointerBufferSize && pbs <= ServerOptions::PointerBufferSize) {
+                        mitm::applet::g_ui_vi_mitm.store(true);
+                        SFT_ABORT_UNLESS(g_ui_server_manager.RegisterMitmServer<mitm::applet::ViSystemRootMitm>(UiPortIndex_ViSystem, ViSystemServiceName));
+                        mitm::applet::LogLine("uiprobe: library applets' vi:s and vi:m wrapped (shared-layer presents logged)");
+                        any = true;
+                    } else {
+                        mitm::applet::LogLine("uiprobe: vi:s pointer buffer too large - applets not wrapped");
+                    }
+                }
+            }
+            if (!any) { return; }
             const s32 prio = os::GetThreadPriority(os::GetCurrentThread());
             for (size_t i = 0; i < UiThreads; ++i) {
                 SFT_ABORT_UNLESS(os::CreateThread(std::addressof(g_ui_threads[i]), UiLoopThread, nullptr, g_ui_stacks[i], sizeof(g_ui_stacks[i]), prio));
@@ -143,7 +177,7 @@ namespace ams {
                 os::StartThread(std::addressof(g_ui_threads[i]));
                 mitm::applet::NoteThread(std::addressof(g_ui_threads[i]));
             }
-            mitm::applet::LogLine("uiprobe: registered mitm server for dispdrv (HOME menu and applets only - pass-through, logging), %zu threads", UiThreads);
+            mitm::applet::LogLine("uiprobe: ui server up (dispdrv/vi:s for the HOME menu and applets - pass-through, logging), %zu threads", UiThreads);
         }
 
         /* ---- M72: the grc recorder's own server --------------------------
@@ -972,12 +1006,19 @@ namespace ams {
             std::shared_ptr<::Service> fsrv;
             sm::MitmProcessInfo client_info;
             server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
-            AMS_ABORT_UNLESS(port_index == UiPortIndex_Dispdrv);
-            mitm::applet::LogLine("dispdrv accept program=%016llx forward pointer_buffer_size=%#x",
+            mitm::applet::LogLine("%s accept program=%016llx forward pointer_buffer_size=%#x", port_index == UiPortIndex_Dispdrv ? "dispdrv" : "vi:s",
                                   static_cast<unsigned long long>(client_info.program_id.value), static_cast<unsigned>(fsrv->pointer_buffer_size));
-            R_RETURN(this->AcceptMitmImpl(server,
-                sf::CreateSharedObjectEmplaced<mitm::applet::IUiBinderMitm, mitm::applet::UiBinderMitm>(decltype(fsrv)(fsrv), client_info),
-                fsrv));
+            switch (port_index) {
+                case UiPortIndex_Dispdrv:
+                    R_RETURN(this->AcceptMitmImpl(server,
+                        sf::CreateSharedObjectEmplaced<mitm::applet::IUiBinderMitm, mitm::applet::UiBinderMitm>(decltype(fsrv)(fsrv), client_info),
+                        fsrv));
+                case UiPortIndex_ViSystem:
+                    R_RETURN(this->AcceptMitmImpl(server,
+                        sf::CreateSharedObjectEmplaced<mitm::applet::IViSystemRootMitm, mitm::applet::ViSystemRootMitm>(decltype(fsrv)(fsrv), client_info),
+                        fsrv));
+                AMS_UNREACHABLE_DEFAULT_CASE();
+            }
         }
 
 #if SFT_GRC_RESEARCH
@@ -1045,7 +1086,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14-probe3: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.14-probe4: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

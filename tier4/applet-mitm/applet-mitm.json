@@ -50,7 +50,8 @@
         "sftap:s",
         "appletOE",
         "lbl",
-        "dispdrv"
+        "dispdrv",
+        "vi:s"
     ],
     "kernel_capabilities": [
         {

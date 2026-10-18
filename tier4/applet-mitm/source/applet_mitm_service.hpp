@@ -33,6 +33,7 @@
  */
 #pragma once
 #include <stratosphere.hpp>
+#include "applet_mitm_uibinder.hpp"
 
 namespace ams::mitm::applet {
     struct DisplayName { char data[0x40]; };
@@ -48,6 +49,7 @@ AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IBinderMitm, AMS_VI_BINDER_MITM_
 /* ---- IApplicationDisplayService wrapper ------------------------------- */
 #define AMS_VI_DISPLAYSVC_MITM_INTERFACE_INFO(C, H)                                                                                                                            \
     AMS_SF_METHOD_INFO(C, H, 100,  Result, GetRelayService, (sf::Out<sf::SharedPointer<ams::mitm::applet::IBinderMitm>> out), (out))                                            \
+    AMS_SF_METHOD_INFO(C, H, 101,  Result, GetSystemDisplayService, (sf::Out<sf::SharedPointer<ams::mitm::applet::IUiSysDisplayMitm>> out), (out))                              \
     AMS_SF_METHOD_INFO(C, H, 1010, Result, OpenDisplay,     (const ams::mitm::applet::DisplayName &display_name, sf::Out<u64> out_display_id), (display_name, out_display_id))
 
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IViDisplaySvcMitm, AMS_VI_DISPLAYSVC_MITM_INTERFACE_INFO, 0x2AB1E142)
@@ -79,6 +81,12 @@ AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IViRootMitm, AMS_VI_ROOT_MITM_IN
 
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IViManagerRootMitm, AMS_VI_MANAGER_ROOT_MITM_INTERFACE_INFO, 0x2AB1E144)
 
+#define AMS_VI_SYSTEM_ROOT_MITM_INTERFACE_INFO(C, H) \
+    AMS_SF_METHOD_INFO(C, H, 1, Result, GetDisplayService, (sf::Out<sf::SharedPointer<ams::mitm::applet::IViDisplaySvcMitm>> out, u32 mode), (out, mode)) \
+    AMS_SF_METHOD_INFO(C, H, 3, Result, GetDisplayServiceWithProxyNameExchange, (sf::Out<sf::SharedPointer<ams::mitm::applet::IViDisplaySvcMitm>> out), (out))
+
+AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IViSystemRootMitm, AMS_VI_SYSTEM_ROOT_MITM_INTERFACE_INFO, 0x2AB1E147)
+
 namespace ams::mitm::applet {
 
     class BinderMitm : public sf::MitmServiceImplBase {
@@ -96,6 +104,8 @@ namespace ams::mitm::applet {
             static bool ShouldMitm(const sm::MitmProcessInfo &) { return true; }
         public:
             Result GetRelayService(sf::Out<sf::SharedPointer<IBinderMitm>> out);
+            /* v0.7.14 probe4: wrapped for library applets only; everyone else gets vi's own */
+            Result GetSystemDisplayService(sf::Out<sf::SharedPointer<IUiSysDisplayMitm>> out);
             Result OpenDisplay(const DisplayName &display_name, sf::Out<u64> out_display_id);
     };
     static_assert(IsIViDisplaySvcMitm<ViDisplaySvcMitm>);
@@ -119,7 +129,8 @@ namespace ams::mitm::applet {
      * the display service, and wrap what it returns */
     Result ForwardGetDisplayService(::Service *fwd, u32 cmd, u32 mode, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out);
     void WrapDisplayService(::Service disp_svc, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out);
-    Result ForwardProxyNameExchange(::Service *fwd, u32 cmd, const u8 *msg, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out);
+    /* plain_cmd: the root's GetDisplayService (vi:u 0, vi:s 1, vi:m 2), the fallback when the request cannot be read */
+    Result ForwardProxyNameExchange(::Service *fwd, u32 cmd, const u8 *msg, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out, u32 plain_cmd);
 
     /* v0.1.1: the running application's pid, refreshed every 100 ms by its
      * own thread (StartAppWatch). NEVER ask pm from ShouldMitm: sm waits on
@@ -151,12 +162,29 @@ namespace ams::mitm::applet {
             static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
                 const u64 tid = client_info.program_id.value;
                 const bool app_range = tid >= UINT64_C(0x0100000000010000) && (tid >> 56) != 0x42;
-                return app_range || IsRunningApplication(client_info.process_id);
+                /* v0.7.14 probe4: and the library applets, with probe-ui.txt */
+                const bool applet = g_ui_vi_mitm.load(std::memory_order_relaxed) && IsLibraryApplet(tid);
+                return app_range || applet || IsRunningApplication(client_info.process_id);
             }
         public:
             Result GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode);
             Result GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out);
     };
     static_assert(IsIViManagerRootMitm<ViManagerRootMitm>);
+
+    /* v0.7.14 probe4: vi:s (ISystemRootService: 1 GetDisplayService, 3 the
+     * proxy-name variant), library applets only, with probe-ui.txt */
+    class ViSystemRootMitm : public sf::MitmServiceImplBase {
+        public:
+            using MitmServiceImplBase::MitmServiceImplBase;
+        public:
+            static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
+                return g_ui_vi_mitm.load(std::memory_order_relaxed) && IsLibraryApplet(client_info.program_id.value);
+            }
+        public:
+            Result GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode);
+            Result GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out);
+    };
+    static_assert(IsIViSystemRootMitm<ViSystemRootMitm>);
 
 }

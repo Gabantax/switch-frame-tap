@@ -115,6 +115,11 @@ namespace ams::mitm::applet {
     /* ---- IHOSBinderDriver: the frame pipeline -------------------------- */
 
     Result BinderMitm::TransactParcelAuto(s32 session_id, u32 code, u32 flags, const sf::InAutoSelectBuffer &parcel_in, const sf::OutAutoSelectBuffer &parcel_out) {
+        /* v0.7.14 probe4: a library applet's relay - logged, never the game's capture */
+        if (IsLibraryApplet(m_client_info.program_id.value)) {
+            UiNoteTransaction(m_client_info.program_id.value, session_id, code, parcel_in.GetPointer(), parcel_in.GetSize());
+            R_RETURN(sm::mitm::ResultShouldForwardToSession());
+        }
         const u32 total = g_txn_total.fetch_add(1) + 1;
         const u32 per   = (code < 16) ? (g_txn_per_code[code].fetch_add(1) + 1) : 0;
         g_stats.txns.store(total, std::memory_order_relaxed);
@@ -295,6 +300,23 @@ namespace ams::mitm::applet {
         /* (v0.7.1: the M-era indirect-layer probe that ran here once per boot,
          * on the first app's display service, is gone - research, not release) */
 
+        R_SUCCEED();
+    }
+
+    Result ViDisplaySvcMitm::GetSystemDisplayService(sf::Out<sf::SharedPointer<IUiSysDisplayMitm>> out) {
+        if (!IsLibraryApplet(m_client_info.program_id.value)) { R_RETURN(sm::mitm::ResultShouldForwardToSession()); }
+        ::Service sys_svc = {};
+        const Result rc = serviceDispatch(m_forward_service.get(), 101,
+            .out_num_objects = 1,
+            .out_objects     = std::addressof(sys_svc),
+        );
+        LogLine("   %016llx: GetSystemDisplayService rc=0x%x - wrapped (shared-layer presents logged)",
+                static_cast<unsigned long long>(m_client_info.program_id.value), rc.GetValue());
+        R_TRY(rc);
+        auto shared_srv = MakeForwardService(sys_svc);
+        const sf::cmif::DomainObjectId target_object_id{ serviceGetObjectId(std::addressof(sys_svc)) };
+        ::ams::sf::impl::g_tier4_pending_mitm_forward = shared_srv;
+        out.SetValue(sf::CreateSharedObjectEmplaced<IUiSysDisplayMitm, UiSysDisplayMitm>(std::shared_ptr<::Service>(shared_srv), m_client_info), target_object_id);
         R_SUCCEED();
     }
 
@@ -517,7 +539,7 @@ namespace ams::mitm::applet {
     }
 
     /* msg: the client's request, copied from TLS before any IPC of ours */
-    Result ForwardProxyNameExchange(::Service *fwd, u32 cmd, const u8 *msg, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out) {
+    Result ForwardProxyNameExchange(::Service *fwd, u32 cmd, const u8 *msg, const sm::MitmProcessInfo &ci, sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> &out, u32 plain_cmd) {
         g_stats.getdisp.fetch_add(1);
         LogMark("GetDisplayServiceWithProxyNameExchange:enter");
 
@@ -559,9 +581,9 @@ namespace ams::mitm::applet {
             disp.out_objects     = std::addressof(disp_svc);
             rc = serviceDispatchImpl(fwd, cmd, a, static_cast<u32>(args), nullptr, 0, disp);
         } else {
-            /* the plain GetDisplayService of the same root: 0 on vi:u, 2 on vi:m */
+            /* the plain GetDisplayService of the same root: 0 on vi:u, 1 on vi:s, 2 on vi:m */
             const u32 policy = cmd == 3 ? 1 : 0;
-            rc = serviceDispatchIn(fwd, cmd - 1, policy,
+            rc = serviceDispatchIn(fwd, plain_cmd, policy,
                                    .out_num_objects = 1, .out_objects = std::addressof(disp_svc));
         }
         if (R_FAILED(rc)) {
@@ -586,7 +608,7 @@ namespace ams::mitm::applet {
          * message buffer: copy the game's request as it arrived. */
         alignas(0x10) u8 msg[0x100];
         std::memcpy(msg, armGetTls(), sizeof(msg));
-        R_RETURN(ForwardProxyNameExchange(m_forward_service.get(), 1, msg, m_client_info, out));
+        R_RETURN(ForwardProxyNameExchange(m_forward_service.get(), 1, msg, m_client_info, out, 0));
     }
 
     Result ViManagerRootMitm::GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode) {
@@ -596,7 +618,17 @@ namespace ams::mitm::applet {
     Result ViManagerRootMitm::GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out) {
         alignas(0x10) u8 msg[0x100];
         std::memcpy(msg, armGetTls(), sizeof(msg));
-        R_RETURN(ForwardProxyNameExchange(m_forward_service.get(), 3, msg, m_client_info, out));
+        R_RETURN(ForwardProxyNameExchange(m_forward_service.get(), 3, msg, m_client_info, out, 2));
+    }
+
+    Result ViSystemRootMitm::GetDisplayService(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out, u32 mode) {
+        R_RETURN(ForwardGetDisplayService(m_forward_service.get(), 1, mode, m_client_info, out));
+    }
+
+    Result ViSystemRootMitm::GetDisplayServiceWithProxyNameExchange(sf::Out<sf::SharedPointer<IViDisplaySvcMitm>> out) {
+        alignas(0x10) u8 msg[0x100];
+        std::memcpy(msg, armGetTls(), sizeof(msg));
+        R_RETURN(ForwardProxyNameExchange(m_forward_service.get(), 3, msg, m_client_info, out, 1));
     }
 
 }

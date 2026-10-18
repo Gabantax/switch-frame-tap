@@ -212,6 +212,94 @@ namespace ams::mitm::applet {
         R_RETURN(sm::mitm::ResultShouldForwardToSession());
     }
 
+    void UiNoteTransaction(u64 tid, s32 id, u32 code, const void *in, size_t in_size) {
+        Note(tid, id, code, static_cast<const u8 *>(in), in_size);
+        if (code == 14) {
+            if (const auto *gb = FindGraphicBuffer(in, in_size); gb != nullptr) {
+                char tag[64];
+                std::snprintf(tag, sizeof(tag), "ui relay %d (%016llx) setPreallocatedBuffer slot %d", id, static_cast<unsigned long long>(tid),
+                              ParseParcelSlot(static_cast<const u8 *>(in), in_size));
+                LogGraphicBuffer(tag, gb);
+            }
+        }
+    }
+
+    /* ---- probe4: vi's shared-layer commands --------------------------- */
+
+    constinit std::atomic<bool> g_ui_vi_mitm{false};
+    constinit SharedPresentState g_shared_present = {};
+
+    namespace {
+        constinit std::atomic<u32> g_sl_logged{0};
+        bool SlLog() { return g_sl_logged.fetch_add(1, std::memory_order_relaxed) < 60; }
+    }
+
+    Result UiSysDisplayMitm::CloseSharedLayer(u64 layer) {
+        LogLine("shared layer %#llx (%016llx): CloseSharedLayer", static_cast<unsigned long long>(layer), static_cast<unsigned long long>(m_client_info.program_id.value));
+        R_RETURN(sm::mitm::ResultShouldForwardToSession());
+    }
+
+    Result UiSysDisplayMitm::ConnectSharedLayer(u64 layer) {
+        LogLine("shared layer %#llx (%016llx): ConnectSharedLayer", static_cast<unsigned long long>(layer), static_cast<unsigned long long>(m_client_info.program_id.value));
+        R_RETURN(sm::mitm::ResultShouldForwardToSession());
+    }
+
+    Result UiSysDisplayMitm::DisconnectSharedLayer(u64 layer) {
+        LogLine("shared layer %#llx (%016llx): DisconnectSharedLayer", static_cast<unsigned long long>(layer), static_cast<unsigned long long>(m_client_info.program_id.value));
+        R_RETURN(sm::mitm::ResultShouldForwardToSession());
+    }
+
+    Result UiSysDisplayMitm::GetSharedFrameBufferAcquirableEvent(u64 layer) {
+        LogLine("shared layer %#llx (%016llx): GetSharedFrameBufferAcquirableEvent", static_cast<unsigned long long>(layer), static_cast<unsigned long long>(m_client_info.program_id.value));
+        R_RETURN(sm::mitm::ResultShouldForwardToSession());
+    }
+
+    /* forwarded by hand: the reply names the slot to draw into */
+    Result UiSysDisplayMitm::AcquireSharedFrameBuffer(sf::Out<SharedAcquireOut> out, u64 layer) {
+        SharedAcquireOut o = {};
+        const Result rc = ::ams::Result(serviceDispatchInOut(m_forward_service.get(), 8254, layer, o));
+        if (R_SUCCEEDED(rc)) {
+            out.SetValue(o);
+            g_shared_present.acquired_slot.store(static_cast<s32>(o.slot), std::memory_order_relaxed);
+            const u32 n = g_shared_present.acquires.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 4 && SlLog()) {
+                u32 fc = 0, f0 = 0, f1 = 0;
+                std::memcpy(std::addressof(fc), o.fence, 4);
+                std::memcpy(std::addressof(f0), o.fence + 4, 4);
+                std::memcpy(std::addressof(f1), o.fence + 8, 4);
+                LogLine("shared layer %#llx (%016llx): Acquire #%u -> slot %llu, the layer's slots %d %d %d %d, fence %u: %u=%u",
+                        static_cast<unsigned long long>(layer), static_cast<unsigned long long>(m_client_info.program_id.value), n,
+                        static_cast<unsigned long long>(o.slot), o.slot_indexes[0], o.slot_indexes[1], o.slot_indexes[2], o.slot_indexes[3], fc, f0, f1);
+            }
+        } else if (SlLog()) {
+            LogLine("shared layer %#llx: Acquire rc=0x%x", static_cast<unsigned long long>(layer), rc.GetValue());
+        }
+        R_RETURN(rc);
+    }
+
+    /* forwarded by hand so the record follows vi's own state change */
+    Result UiSysDisplayMitm::PresentSharedFrameBuffer(const SharedPresentIn &in) {
+        const Result rc = ::ams::Result(serviceDispatchIn(m_forward_service.get(), 8255, in));
+        if (R_SUCCEEDED(rc)) {
+            g_shared_present.slot.store(static_cast<s32>(in.slot), std::memory_order_relaxed);
+            g_shared_present.layer.store(in.layer, std::memory_order_relaxed);
+            g_shared_present.tick.store(armGetSystemTick(), std::memory_order_relaxed);
+            const u32 n = g_shared_present.count.fetch_add(1, std::memory_order_release) + 1;
+            if ((n <= 4 || n % 600 == 0) && SlLog()) {
+                u32 fc = 0, f0 = 0, f1 = 0;
+                std::memcpy(std::addressof(fc), in.fence, 4);
+                std::memcpy(std::addressof(f0), in.fence + 4, 4);
+                std::memcpy(std::addressof(f1), in.fence + 8, 4);
+                LogLine("shared layer %#llx (%016llx): Present #%u slot %llu, crop (%d,%d)-(%d,%d), transform 0x%x, swap %d, fence %u: %u=%u",
+                        static_cast<unsigned long long>(in.layer), static_cast<unsigned long long>(m_client_info.program_id.value), n,
+                        static_cast<unsigned long long>(in.slot), in.crop[0], in.crop[1], in.crop[2], in.crop[3], in.transform, in.swap_interval, fc, f0, f1);
+            }
+        } else if (SlLog()) {
+            LogLine("shared layer %#llx: Present slot %llu rc=0x%x", static_cast<unsigned long long>(in.layer), static_cast<unsigned long long>(in.slot), rc.GetValue());
+        }
+        R_RETURN(rc);
+    }
+
     Result UiBinderMitm::AdjustRefcount(s32 binder_id, s32 add, s32 type) {
         static constinit u32 s_logged = 0;
         if (s_logged++ < 48) {

@@ -23,6 +23,7 @@
  */
 #pragma once
 #include <stratosphere.hpp>
+#include <atomic>
 
 #define AMS_UI_BINDER_MITM_INTERFACE_INFO(C, H)                                                                                                                                                                      \
     AMS_SF_METHOD_INFO(C, H, 0, Result, TransactParcel,     (s32 binder_id, u32 code, u32 flags, const sf::InBuffer &parcel_in, const sf::OutBuffer &parcel_out), (binder_id, code, flags, parcel_in, parcel_out))            \
@@ -32,10 +33,85 @@
 
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IUiBinderMitm, AMS_UI_BINDER_MITM_INTERFACE_INFO, 0x2AB1E145)
 
+/* probe4: vi's shared-layer commands (ISystemDisplayService, 22.5.0 sizes).
+ * probe3 saw no library applet open dispdrv, yet the controller applet drew
+ * into vi's shared-buffer slots 3 and 4: it presents with
+ * AcquireSharedFrameBuffer (the slot to draw) and PresentSharedFrameBuffer
+ * (the slot drawn). OpenSharedLayer (8250) carries a PID and is left alone. */
+namespace ams::mitm::applet {
+    struct SharedAcquireOut {
+        u8  fence[0x24];
+        s32 slot_indexes[4];
+        u32 pad;
+        u64 slot;
+    };
+    static_assert(sizeof(SharedAcquireOut) == 0x40);
+    struct SharedPresentIn {
+        u8  fence[0x24];
+        s32 crop[4];
+        u32 transform;
+        s32 swap_interval;
+        u32 pad;
+        u64 layer;
+        u64 slot;
+    };
+    static_assert(sizeof(SharedPresentIn) == 0x50);
+    static_assert(__builtin_offsetof(SharedPresentIn, layer) == 0x40);
+}
+
+#define AMS_UI_SYSDISP_MITM_INTERFACE_INFO(C, H)                                                                                                                   \
+    AMS_SF_METHOD_INFO(C, H, 8251, Result, CloseSharedLayer,                    (u64 layer), (layer))                                                            \
+    AMS_SF_METHOD_INFO(C, H, 8252, Result, ConnectSharedLayer,                  (u64 layer), (layer))                                                            \
+    AMS_SF_METHOD_INFO(C, H, 8253, Result, DisconnectSharedLayer,               (u64 layer), (layer))                                                            \
+    AMS_SF_METHOD_INFO(C, H, 8254, Result, AcquireSharedFrameBuffer,            (sf::Out<ams::mitm::applet::SharedAcquireOut> out, u64 layer), (out, layer))   \
+    AMS_SF_METHOD_INFO(C, H, 8255, Result, PresentSharedFrameBuffer,            (const ams::mitm::applet::SharedPresentIn &in), (in))                           \
+    AMS_SF_METHOD_INFO(C, H, 8256, Result, GetSharedFrameBufferAcquirableEvent, (u64 layer), (layer))
+
+AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IUiSysDisplayMitm, AMS_UI_SYSDISP_MITM_INTERFACE_INFO, 0x2AB1E146)
+
 namespace ams::mitm::applet {
 
     /* the HOME menu, the overlay and every library applet */
     inline bool IsUiProgram(u64 tid) { return tid >= UINT64_C(0x0100000000001000) && tid < UINT64_C(0x0100000000002000); }
+
+    /* a library applet: not the HOME menu or the overlay (they connect at
+     * boot), and not the Album's id, which homebrew uses (hbloader) */
+    inline bool IsLibraryApplet(u64 tid) {
+        return IsUiProgram(tid) && tid != UINT64_C(0x0100000000001000) && tid != UINT64_C(0x010000000000100C) && tid != UINT64_C(0x010000000000100D);
+    }
+
+    /* set at startup when probe-ui.txt asks for it; read by ShouldMitm (no IPC there) */
+    extern std::atomic<bool> g_ui_vi_mitm;
+
+    class UiSysDisplayMitm : public sf::MitmServiceImplBase {
+        public:
+            using MitmServiceImplBase::MitmServiceImplBase;
+            static bool ShouldMitm(const sm::MitmProcessInfo &) { return true; }
+        public:
+            Result CloseSharedLayer(u64 layer);
+            Result ConnectSharedLayer(u64 layer);
+            Result DisconnectSharedLayer(u64 layer);
+            Result AcquireSharedFrameBuffer(sf::Out<SharedAcquireOut> out, u64 layer);
+            Result PresentSharedFrameBuffer(const SharedPresentIn &in);
+            Result GetSharedFrameBufferAcquirableEvent(u64 layer);
+    };
+    static_assert(IsIUiSysDisplayMitm<UiSysDisplayMitm>);
+
+    /* the last shared-frame present a library applet made, recorded after vi
+     * handled it; count first changes when a present lands (seqlock-free:
+     * read count, slot, count again) */
+    struct SharedPresentState {
+        std::atomic<u32> count;
+        std::atomic<s32> slot;
+        std::atomic<u64> layer;
+        std::atomic<u64> tick;
+        std::atomic<u32> acquires;
+        std::atomic<s32> acquired_slot;
+    };
+    extern SharedPresentState g_shared_present;
+
+    /* a binder transaction from the HOME menu or an applet through vi's relay */
+    void UiNoteTransaction(u64 tid, s32 id, u32 code, const void *in, size_t in_size);
 
     class UiBinderMitm : public sf::MitmServiceImplBase {
         public:

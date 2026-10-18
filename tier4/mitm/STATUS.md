@@ -206,6 +206,35 @@ which ones are being drawn), each slot written raw to
 HOME menu alone; 4 s into a library applet). `tools/deswizzle.py --size
 1280x720` turns a slot into a PNG.
 
+**probe3 run (`logs/v0714-probe3`, PNGs in `png/`, measured):**
+- **The pixels are readable.** Attaching to vi as a debugger: 17 attach
+  events, vi resumed **39 us** later, no events while attached, no failed
+  reads. All 7 slots (26.9 MB) read in 18-25 ms (~1.2 GB/s), ~3 ms a slot.
+- **Slots 3 and 4 are the foreground's double buffer**: on the HOME menu
+  alone both changed on every pass ~20 ms apart (60 Hz) and hold perfect
+  1280x720 HOME-menu frames; with the controller applet open, the *same* slots
+  hold the applet. Slot 6 is the boot logo; 0-2 are capture buffers (opaque
+  black at idle; the HOME menu's background behind the applet). Format: RGBA8,
+  block-linear, block height 16 - `deswizzle.py --size 1280x720` decodes it.
+- The applet's slot images have 128x128 holes: each slot was written to the
+  SD in 64 KB chunks over ~160 ms while redrawn 5 times - a chunk caught
+  mid-draw shows the background. A whole slot in one 3 ms read, of the slot
+  that is finished, is what streaming needs.
+- No library applet connected to dispdrv (mitm registered, no accepts): they
+  present through vi's shared-layer commands, not the binder.
+- Binder `query` from our own session: every id 1..24 replied the same
+  (448, 720) - not per-binder state; dropped (opt-in "binders").
+
+**probe4 (v0.7.14-probe4):** library applets' vi:s and vi:m wrapped
+(IsLibraryApplet: not qlaunch, overlay or the Album id hbloader uses):
+Acquire/PresentSharedFrameBuffer forwarded by hand and logged (slot, crop,
+fence). With the controller applet open, **correlation**: vi's writable memory
+(<= 8 MB) read on both sides of a present that changed the slot, differing
+words kept as candidates, 40 more reads keep those whose value always matches
+the last present's slot. Then on the HOME menu alone, the survivors are
+checked against which of slots 3/4 is steady (hashed twice ~6 ms apart). If a
+word passes, it tells the finished HOME-menu slot with no qlaunch IPC at all.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

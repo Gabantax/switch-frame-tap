@@ -25,6 +25,17 @@
  * dispdrv mitm stayed off (dispdrv's pointer buffer is 0x3000); every
  * binder answered query with a bare 4-byte status.
  *
+ * probe3 result (logs/v0714-probe3): attaching to vi costs nothing (vi
+ * resumed 39 us after the attach); 26.9 MB read in 18-25 ms; the HOME menu
+ * and the controller applet both alternate slots 3 and 4 at 60 Hz; slot 6 is
+ * the boot logo, 0-2 capture buffers; reading a slot over 160 ms tears. No
+ * applet opened dispdrv. Every binder query answered alike (448, 720).
+ *
+ * probe4 adds (binders now opt-in with the word "binders"):
+ *  vi       library applets' vi:s and vi:m wrapped: Acquire/PresentSharedFrameBuffer
+ *  corr     with an applet open, vi's writable memory searched for the words
+ *           that follow the presented slot; then checked on the HOME menu
+ *
  * probe3 adds:
  *  snap     vi attached as a debugger for a moment, its 7 slots hashed in 12
  *           passes ~20 ms apart (which slots are being drawn) and written to
@@ -442,6 +453,221 @@ namespace ams::mitm::applet {
             }
         }
 
+        /* ---- probe4: find vi's own record of the presented slot ---------
+         * probe3: the HOME menu and the controller applet both draw into
+         * slots 3 and 4, alternating at 60 Hz; reading the slot being drawn
+         * tears. The applet's presents are now seen (vi wrapped for library
+         * applets), so while it presents, vi's writable memory is searched
+         * for words that follow the presented slot: each 64 KB chunk read on
+         * one side of a present and again on the other (a diff gives
+         * candidates), then 40 more reads keep only the words whose value
+         * always matches the last present's parity. vi keeps that state for
+         * the slots, not for one applet - so the same words should say which
+         * of the HOME menu's slots is finished, without its IPC. */
+        alignas(0x1000) constinit u8 g_snap_buf2[SnapChunk] = {};
+        struct Region { u64 addr, size; };
+        struct CorrCand { u32 reg; u32 off; u32 v[2]; u8 hits[2]; u8 misses; u8 pad; };
+        constexpr u32 MaxCands = 4096;
+        constinit CorrCand g_corr[MaxCands] = {};
+        constinit u32 g_ncorr = 0;
+        constinit Region g_regs[8] = {};
+        constinit u32 g_nregs = 0;
+        constinit u32 g_survivors[16] = {};
+        constinit u32 g_nsurv = 0;
+        constinit bool g_verify_done = false;
+        constinit u64 g_home_alone_since = 0;
+
+        bool WaitPresent(u32 since, u32 timeout_ms) {
+            for (u32 t = 0; t < timeout_ms; ++t) {
+                if (g_shared_present.count.load(std::memory_order_acquire) != since) { return true; }
+                os::SleepThread(TimeSpan::FromMilliSeconds(1));
+            }
+            return false;
+        }
+
+        /* vi's writable memory but the shared buffer, at most 8 MB */
+        void FindViRegions(u64 pid, u64 skip) {
+            g_nregs = 0;
+            os::NativeHandle h = os::InvalidNativeHandle;
+            if (ProgramOf(pid, std::addressof(h)) != ViProgramId) { if (h != os::InvalidNativeHandle) { os::CloseNativeHandle(h); } return; }
+            u64 addr = 0, total = 0;
+            for (u32 guard = 0; guard < 4096 && g_nregs < 8; ++guard) {
+                ::MemoryInfo mi = {};
+                u32 pi = 0;
+                if (R_FAILED(::svcQueryProcessMemory(&mi, &pi, h, addr)) || mi.size == 0) { break; }
+                const u32 type = mi.type & 0xFF;
+                const bool data = type == 0x04 || type == 0x05 || type == 0x09;   /* .data/.bss, heap, module .data */
+                if (data && (mi.perm & 2) != 0 && mi.addr != skip && mi.size <= 8 * 1024 * 1024 && total + mi.size <= 8 * 1024 * 1024) {
+                    g_regs[g_nregs++] = { mi.addr, mi.size };
+                    total += mi.size;
+                }
+                const u64 next = mi.addr + mi.size;
+                if (next <= addr) { break; }
+                addr = next;
+            }
+            os::CloseNativeHandle(h);
+            LogLine("uiprobe: corr: %u vi regions, %llu KB to search", g_nregs, static_cast<unsigned long long>(total / 1024));
+            for (u32 r = 0; r < g_nregs; ++r) { LogLine("   region %u: %#llx %llu KB", r, static_cast<unsigned long long>(g_regs[r].addr), static_cast<unsigned long long>(g_regs[r].size / 1024)); }
+        }
+
+        /* one chunk read with no present landing during it; false if presents stopped */
+        bool ReadQuiet(::ams::svc::Handle dbg, u64 va, u8 *dst, size_t n, u32 *out_count, s32 *out_slot) {
+            for (u32 attempt = 0; attempt < 6; ++attempt) {
+                const u32 c0 = g_shared_present.count.load(std::memory_order_acquire);
+                const s32 s0 = g_shared_present.slot.load(std::memory_order_relaxed);
+                if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(dst), dbg, va, n))) { return false; }
+                if (g_shared_present.count.load(std::memory_order_acquire) == c0) { *out_count = c0; *out_slot = s0; return true; }
+            }
+            return false;
+        }
+
+        void Correlate() {
+            u64 pid = 0, base = 0, size = 0;
+            if (!FindViBuffer(std::addressof(pid), std::addressof(base), std::addressof(size))) { return; }
+            if (!WaitPresent(g_shared_present.count.load(), 200)) { LogLine("uiprobe: corr: no shared-layer presents - nothing to correlate (is vi wrapped?)"); return; }
+            FindViRegions(pid, base);
+            if (g_nregs == 0) { return; }
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid); R_FAILED(ra)) { LogLine("uiprobe: corr: attach rc=0x%x", ra.GetValue()); return; }
+            static_cast<void>(DrainContinue(dbg));
+            const u64 t0 = armTicksToNs(armGetSystemTick());
+            g_ncorr = 0;
+            u32 chunks = 0, skipped = 0, overflow = 0;
+            bool stopped = false;
+            /* phase 1: each chunk on both sides of a present that changed the slot */
+            for (u32 r = 0; r < g_nregs && !stopped; ++r) {
+                for (u64 off = 0; off < g_regs[r].size && !stopped; off += SnapChunk) {
+                    const size_t n = static_cast<size_t>(std::min<u64>(SnapChunk, g_regs[r].size - off));
+                    bool done = false;
+                    for (u32 attempt = 0; attempt < 3 && !done && !stopped; ++attempt) {
+                        u32 ca = 0, cb = 0;
+                        s32 sa = 0, sb = 0;
+                        if (!ReadQuiet(dbg, g_regs[r].addr + off, g_snap_buf, n, std::addressof(ca), std::addressof(sa))) { continue; }
+                        /* the next present that names the other slot */
+                        u32 seen = ca;
+                        bool flipped = false;
+                        for (u32 k = 0; k < 4 && !flipped; ++k) {
+                            if (!WaitPresent(seen, 100)) { stopped = true; break; }
+                            seen = g_shared_present.count.load(std::memory_order_acquire);
+                            flipped = g_shared_present.slot.load(std::memory_order_relaxed) != sa;
+                        }
+                        if (!flipped) { continue; }
+                        if (!ReadQuiet(dbg, g_regs[r].addr + off, g_snap_buf2, n, std::addressof(cb), std::addressof(sb)) || sb == sa) { continue; }
+                        for (size_t i = 0; i + 4 <= n; i += 4) {
+                            u32 a, b;
+                            std::memcpy(std::addressof(a), g_snap_buf + i, 4);
+                            std::memcpy(std::addressof(b), g_snap_buf2 + i, 4);
+                            if (a == b) { continue; }
+                            if (g_ncorr >= MaxCands) { ++overflow; continue; }
+                            CorrCand &c = g_corr[g_ncorr++];
+                            c = {};
+                            c.reg = r;
+                            c.off = static_cast<u32>(off + i);
+                            c.v[sa & 1] = a;
+                            c.v[sb & 1] = b;
+                        }
+                        done = true;
+                    }
+                    ++chunks;
+                    if (!done) { ++skipped; }
+                    static_cast<void>(DrainContinue(dbg));
+                }
+            }
+            const u64 t1 = armTicksToNs(armGetSystemTick());
+            LogLine("uiprobe: corr: phase 1 %u chunks (%u skipped%s) in %llu ms: %u candidates (+%u over the cap)", chunks, skipped, stopped ? ", presents STOPPED" : "",
+                    static_cast<unsigned long long>((t1 - t0) / 1000000), g_ncorr, overflow);
+            /* phase 2: 40 quiet reads of the chunks that hold candidates */
+            u32 passes = 0;
+            for (u32 p = 0; p < 40 && g_ncorr != 0; ++p) {
+                if (!WaitPresent(g_shared_present.count.load(), 100)) { break; }
+                os::SleepThread(TimeSpan::FromMicroSeconds(500 + 1700 * (p % 7)));   /* spread over the frame */
+                ++passes;
+                u32 i = 0;
+                while (i < g_ncorr) {
+                    const u32 r = g_corr[i].reg;
+                    const u32 chunk_off = g_corr[i].off & ~static_cast<u32>(SnapChunk - 1);
+                    const size_t n = static_cast<size_t>(std::min<u64>(SnapChunk, g_regs[r].size - chunk_off));
+                    u32 c = 0;
+                    s32 s = 0;
+                    const bool ok = ReadQuiet(dbg, g_regs[r].addr + chunk_off, g_snap_buf, n, std::addressof(c), std::addressof(s));
+                    for (; i < g_ncorr && g_corr[i].reg == r && (g_corr[i].off & ~static_cast<u32>(SnapChunk - 1)) == chunk_off; ++i) {
+                        if (!ok) { continue; }
+                        CorrCand &k = g_corr[i];
+                        u32 v;
+                        std::memcpy(std::addressof(v), g_snap_buf + (k.off - chunk_off), 4);
+                        if (v == k.v[s & 1]) { if (k.hits[s & 1] < 255) { ++k.hits[s & 1]; } } else if (k.misses < 255) { ++k.misses; }
+                    }
+                }
+                static_cast<void>(DrainContinue(dbg));
+            }
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+            /* survivors: never wrong more than twice, and seen on both slots */
+            g_nsurv = 0;
+            u32 total = 0;
+            for (u32 i = 0; i < g_ncorr; ++i) {
+                const CorrCand &k = g_corr[i];
+                if (k.misses <= 2 && k.hits[0] >= 5 && k.hits[1] >= 5 && static_cast<u32>(k.hits[0] + k.hits[1] + k.misses) >= passes / 2) {
+                    ++total;
+                    if (g_nsurv < 16) { g_survivors[g_nsurv++] = i; }
+                    if (total <= 40) {
+                        LogLine("   survivor: region %u +%#x (%#llx): %#x when the last present was slot %s, %#x when %s; hits %u/%u, misses %u",
+                                k.reg, k.off, static_cast<unsigned long long>(g_regs[k.reg].addr + k.off),
+                                k.v[0], "even", k.v[1], "odd", k.hits[0], k.hits[1], k.misses);
+                    }
+                }
+            }
+            LogLine("uiprobe: corr: %u passes, %u of %u candidates follow the presented slot; %llu ms attached; detached",
+                    passes, total, g_ncorr, static_cast<unsigned long long>((armTicksToNs(armGetSystemTick()) - t0) / 1000000));
+        }
+
+        /* On the HOME menu alone: do the survivors pick the finished slot?
+         * Each sample hashes slots 3 and 4 twice back to back (~12 ms): a
+         * slot whose hash moved is being drawn. A word that tracks "last
+         * presented" should point at a steady slot every time. */
+        void VerifyOnHome() {
+            if (g_nsurv == 0) { return; }
+            u64 pid = 0, base = 0, size = 0;
+            if (!FindViBuffer(std::addressof(pid), std::addressof(base), std::addressof(size))) { return; }
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid); R_FAILED(ra)) { LogLine("uiprobe: verify: attach rc=0x%x", ra.GetValue()); return; }
+            static_cast<void>(DrainContinue(dbg));
+            auto slot_hash = [&](u32 s) {
+                u64 h = 0;
+                for (size_t off = 0; off < ViSlotSize; off += SnapChunk) {
+                    if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, base + s * ViSlotSize + off, SnapChunk))) { h ^= Hash(g_snap_buf, SnapChunk) + off; }
+                }
+                return h;
+            };
+            u32 good[16] = {}, bad[16] = {}, unknown[16] = {}, moving[2] = {}, samples = 0;
+            for (u32 n = 0; n < 60; ++n) {
+                u32 val[16] = {};
+                for (u32 k = 0; k < g_nsurv; ++k) {
+                    const CorrCand &c = g_corr[g_survivors[k]];
+                    static_cast<void>(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(std::addressof(val[k])), dbg, g_regs[c.reg].addr + c.off, 4));
+                }
+                const u64 a1 = slot_hash(3), b1 = slot_hash(4), a2 = slot_hash(3), b2 = slot_hash(4);
+                const bool steady[2] = { b1 == b2, a1 == a2 };   /* index = parity: slot 4 even, slot 3 odd */
+                moving[0] += !steady[0];
+                moving[1] += !steady[1];
+                ++samples;
+                for (u32 k = 0; k < g_nsurv; ++k) {
+                    const CorrCand &c = g_corr[g_survivors[k]];
+                    const int par = val[k] == c.v[0] ? 0 : val[k] == c.v[1] ? 1 : -1;
+                    if (par < 0) { ++unknown[k]; continue; }
+                    if (steady[par] && !steady[par ^ 1]) { ++good[k]; } else if (!steady[par] && steady[par ^ 1]) { ++bad[k]; }
+                }
+                static_cast<void>(DrainContinue(dbg));
+                os::SleepThread(TimeSpan::FromMicroSeconds(3000 + 2300 * (n % 5)));
+            }
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+            LogLine("uiprobe: verify on the HOME menu: %u samples, slot 4 moving in %u, slot 3 moving in %u", samples, moving[0], moving[1]);
+            for (u32 k = 0; k < g_nsurv; ++k) {
+                const CorrCand &c = g_corr[g_survivors[k]];
+                LogLine("   %#llx: pointed at the steady slot %u times, at the one being drawn %u times, neither value %u times",
+                        static_cast<unsigned long long>(g_regs[c.reg].addr + c.off), good[k], bad[k], unknown[k]);
+            }
+        }
+
         /* the HOME menu alone, 75 s in; a library applet 4 s after it opened */
         void SnapSteps(u64 now, const Proc *cur, u32 cn) {
             u64 lib = 0;
@@ -458,8 +684,16 @@ namespace ams::mitm::applet {
             if (!g_snap_applet_done && lib != 0 && lib != UINT64_C(0x010000000000100D) && now - g_applet_since_ns >= UINT64_C(4000000000)) {
                 g_snap_applet_done = true;
                 const char *nm = AppletName(lib);
-                LogLine("uiprobe: %s has been open 4 s", nm != nullptr ? nm : "an applet");
+                LogLine("uiprobe: %s has been open 4 s (%u shared-layer presents seen so far)", nm != nullptr ? nm : "an applet", g_shared_present.count.load());
                 SnapVi("applet");
+                Correlate();
+            }
+            /* the survivors checked on the HOME menu, 3 s after it is alone again */
+            const bool home_alone = lib == 0 && !app;
+            if (!home_alone) { g_home_alone_since = 0; } else if (g_home_alone_since == 0) { g_home_alone_since = now; }
+            if (g_snap_applet_done && !g_verify_done && home_alone && now - g_home_alone_since >= UINT64_C(3000000000)) {
+                g_verify_done = true;
+                VerifyOnHome();
             }
         }
 
@@ -499,9 +733,9 @@ namespace ams::mitm::applet {
         if (!g_probe_checked) {
             ReadConfig();
             if (g_probe_on) {
-                LogLine("uiprobe: on (config/switch-frame-tap/probe-ui.txt: \"%.40s\") - map %s, dispdrv %s, binders %s, snap %s", g_probe_words,
-                        UiProbeWants("map") ? "on" : "off", UiProbeWants("dispdrv") ? "on" : "off", UiProbeWants("binders") ? "on" : "off",
-                        UiProbeWants("snap") ? "on" : "off");
+                LogLine("uiprobe: on (config/switch-frame-tap/probe-ui.txt: \"%.40s\") - map %s, dispdrv %s, vi %s, binders %s, snap %s", g_probe_words,
+                        UiProbeWants("map") ? "on" : "off", UiProbeWants("dispdrv") ? "on" : "off", UiProbeWants("vi") ? "on" : "off",
+                        HasWord("binders") ? "on" : "off", UiProbeWants("snap") ? "on" : "off");
             }
         }
         if (!g_probe_on || g_pmdmnt_rc != 0) { return; }
@@ -510,7 +744,7 @@ namespace ams::mitm::applet {
         Summaries(now);
 
         /* the binder look, last in the boot: 4 minutes in, then 60 s of samples */
-        if (UiProbeWants("binders") && g_dd_ok) {
+        if (HasWord("binders") && g_dd_ok) {   /* probe4: opt-in - every id answered alike */
             if (g_binder_stage == 0 && now >= UINT64_C(240000000000)) {
                 g_binder_stage = 1;
                 Enumerate();

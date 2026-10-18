@@ -1193,11 +1193,27 @@ namespace ams::mitm::applet {
             g_last_app = app;
         }
         if (UiProbeWants("snap")) { SnapSteps(now, cur, cn); }
+        /* test5: System Settings showed no new process in the stream's eyes but
+         * took the Applet pool up ~317 MB - dump the maps on a jump like that */
+        {
+            static u64 base_mb = 0;
+            u64 cur = 0, lim = 0;
+            if (R_SUCCEEDED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) {
+                const u64 mb = cur >> 20;
+                if (base_mb == 0 || mb < base_mb) { base_mb = mb; }
+                if (mb >= base_mb + 100 && UiProbeWants("map") && g_dump_at_ns == 0) {
+                    LogLine("uiprobe: the Applet pool grew %llu -> %llu MB", static_cast<unsigned long long>(base_mb), static_cast<unsigned long long>(mb));
+                    base_mb = mb;
+                    g_dump_at_ns = now + UINT64_C(3000000000);
+                    g_dump_why = "the Applet pool grew 100 MB or more";
+                }
+            }
+        }
         if ((first || changed) && UiProbeWants("map")) {
             g_dump_at_ns = now + UINT64_C(2000000000);   /* let it allocate first */
             g_dump_why = first ? "idle" : "a HOME-menu process or applet started";
         }
-        if (g_dump_at_ns != 0 && now >= g_dump_at_ns && g_dumps < 12) {
+        if (g_dump_at_ns != 0 && now >= g_dump_at_ns && g_dumps < 16) {
             g_dump_at_ns = 0;
             ++g_dumps;
             DumpMaps(g_dump_why);

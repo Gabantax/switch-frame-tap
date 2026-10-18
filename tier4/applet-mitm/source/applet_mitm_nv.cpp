@@ -623,19 +623,13 @@ namespace ams::mitm::applet {
             LogLine("   MAP_CMD_BUFFER(%s handle=%u compr=%u req=0x%08x) rc=0x%x nverr=%u -> phys=0x%x",
                     what, handle, is_compr, req, rc, nverr, a.phys_addr_out);
             if (R_FAILED(rc) || nverr != 0) { return false; }
-            if (a.phys_addr_out == 0) {
-                /* ours was at 0: move it off. v0.7.14: unmapped FIRST - the
-                 * guard was mapped while ours still held 0, so it always
-                 * landed above it and the retry never ran: after a homebrew
-                 * app closed (its buffers had held the low addresses) every
-                 * session refused its slot until reboot (test3) */
+            if (a.phys_addr_out == 0 && AbsorbDeviceZero(chan_fd, req)) {
+                /* ours was at 0: move it off */
                 MapCmdBufArgs u = {};
                 u.num_handles  = 1;
                 u.handle_id_in = handle;
                 u32 ue = 0;
                 NvIoctl(chan_fd, NvHostIocChannelUnmapCmdBuf, std::addressof(u), sizeof(u), std::addressof(ue));
-                const bool guarded = AbsorbDeviceZero(chan_fd, req);
-                if (!guarded) { LogLine("   %s: the guard page did not take device address 0 - mapping again anyway", what); }
                 a = {};
                 a.num_handles  = 1;
                 a.is_compr     = is_compr;
@@ -655,6 +649,32 @@ namespace ams::mitm::applet {
             a.handle_id_in = handle;
             u32 nverr = 0;
             NvIoctl(chan_fd, NvHostIocChannelUnmapCmdBuf, std::addressof(a), sizeof(a), std::addressof(nverr));
+        }
+
+        bool NvmapFree(u32 fd, u32 handle);
+
+        /* v0.7.14: before a session pins its buffers, a guard page first. A
+         * hole at device address 0 opens when another process's buffers that
+         * held it go away (a homebrew app closing, test3): the guard fills it
+         * and stays; with 0 held already it is not needed and goes again.
+         * (Moving our own mapping off 0 afterwards does not work: an unmapped
+         * handle keeps its address until freed - test4.) */
+        void HoldDeviceZero(u32 chan_fd) {
+            if (g_guard_nvmap_fd == 0 || g_vic_heap == 0 || g_guard_next >= 0x10000) { return; }
+            u32 gh = 0, gid = 0;
+            if (R_FAILED(NvmapOwn(g_guard_nvmap_fd, reinterpret_cast<u8 *>(g_vic_heap + g_guard_next), 0x1000, 0, std::addressof(gh), std::addressof(gid), false))) { return; }
+            MapCmdBufArgs a = {};
+            a.num_handles  = 1;
+            a.handle_id_in = gh;
+            u32 nverr = 0;
+            const ::Result rc = NvIoctl(chan_fd, NvHostIocChannelMapCmdBuf, std::addressof(a), sizeof(a), std::addressof(nverr));
+            if (R_SUCCEEDED(rc) && nverr == 0 && a.phys_addr_out == 0) {
+                g_guard_next += 0x1000;
+                LogLine("   device address 0 was free - a guard page holds it now");
+                return;
+            }
+            if (R_SUCCEEDED(rc) && nverr == 0) { UnmapCmdBuffer(chan_fd, gh); }
+            static_cast<void>(NvmapFree(g_guard_nvmap_fd, gh));
         }
 
         /* CREATE + ALLOC(kind, our cpu pages) + GET_ID for a buffer we own. */
@@ -5641,6 +5661,7 @@ namespace ams::mitm::applet {
                 }
                 nvfd = nvmap_fd;
                 ++g_capture_handles;
+                HoldDeviceZero(vfd);   /* v0.7.14 */
                 MapCmdBuffer(vfd, sh, std::addressof(slot_vic), "nvf-slot", 0);
                 if (slot_vic == 0) { LogLine("   %s: slot pin returned 0 - refusing", who); return false; }
 

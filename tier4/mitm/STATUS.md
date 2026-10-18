@@ -359,6 +359,23 @@ maps again; RunVicBlit runs without a game when home_menu is on; HOME in a
 game with home_menu on goes straight to the HOME-menu session (no donor
 release and 5 s hold - test3 took 8 s).
 
+**test4 run (`logs/v0714-test4`, recording switch_2026-10-18_01-29-06.mp4):**
+"that worked fine" - the HOME menu from boot, MK8, sphaira, HOME and back,
+Controllers, My Page all stream. Not streamed: **System Settings** (the
+stream shows the HOME menu sliding out, then only its wallpaper - Settings
+is a layer of its own; opening it took the Applet pool to 454 MB, so the
+watch released the memory first) and **the Album / hbmenu** (own buffers,
+like a game: photoViewer presents through dispdrv, hbmenu through vi:m).
+No sound outside games (grc:d records the game only). The address-0 fix as
+written did not move a mapping: an unmapped handle keeps its device address
+until freed (the setup guard, unmapped and mapped again, came back at 0).
+
+**test5:** HoldDeviceZero - before a session pins its buffers, a 4 KB guard
+page is mapped; at 0 it stays (fills the hole), elsewhere it is freed again;
+MapCmdBuffer as before. Probe (probe-ui.txt "nodispdrv novi nosnap"): a
+memory map whenever the Applet pool jumps 100 MB - where Settings' frames
+live.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

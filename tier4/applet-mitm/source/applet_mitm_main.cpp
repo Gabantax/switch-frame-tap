@@ -30,6 +30,7 @@
 #include "applet_mitm_net.hpp"
 #include "applet_mitm_uibinder.hpp"
 #include "applet_mitm_uisource.hpp"
+#include "applet_mitm_soundprobe.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -1108,7 +1109,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14-beta1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.14-sound1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1264,6 +1265,7 @@ namespace ams {
         mitm::applet::StartAppWatch();
         mitm::applet::StartShotInput();   /* idle, and hid untouched, until screenshots are on */
         mitm::applet::StartAudio();
+        mitm::applet::SoundProbeStart();   /* v0.7.14 research: off without probe-sound.txt */
         mitm::applet::StartNet();         /* v0.7: only with "net"; waits for the console to be online */       /* idle, and grc:d untouched, until audio is on */
         mitm::applet::StartVicWorker();
         mitm::applet::StartAppletWatch();   /* v0.7.10: an applet starting while we stream */

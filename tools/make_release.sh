@@ -15,6 +15,11 @@ STAGE="$OUT/stage-switch"
 
 [ -f "$REPO/ref/libtesla/include/tesla.hpp" ] || { echo "ref/libtesla is missing (git clone https://github.com/WerWolv/libtesla ref/libtesla)"; exit 1; }
 
+# v0.7.14: research probes stay out of releases (test builds: ALLOW_PROBES=1)
+if [ -z "$ALLOW_PROBES" ] && grep -qE '^#define SFT_[A-Z_]*PROBE 1' "$REPO"/tier4/applet-mitm/source/*.hpp; then
+    echo "a research probe is on (#define SFT_..._PROBE 1) - turn it off, or ALLOW_PROBES=1 for a test build"; exit 1
+fi
+
 echo "== sysmodule"
 MAKEFLAGS="${MAKEFLAGS:--j6}" bash "$REPO/tier4/applet-mitm/build.sh" >/dev/null
 echo "== memory donor"

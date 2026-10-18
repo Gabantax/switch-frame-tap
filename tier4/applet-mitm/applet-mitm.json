@@ -40,7 +40,9 @@
         "pm:shell",
         "appletOE",
         "lbl",
-        "dispdrv"
+        "dispdrv",
+        "aud:a",
+        "audrec:u"
     ],
     "service_host": [
         "vi:u",

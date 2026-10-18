@@ -429,6 +429,15 @@ because a game process existed; the pool was at 363 of 500 MB (137 free).
 screen - its last present (g_app_present_tick, noted even during a UI
 session) 1 s or more ago; with the game in front, the old rule as before.
 
+**test8 run (`logs/v0714-test8`):** "that worked" - the Album over a
+suspended game streamed with no pause (live[5] at 142 s); a game's manual
+(applet 0x17) still stopped the stream first (am: PrepareForApplet), and
+System Settings still re-set up on a capped donor. No errors.
+
+**Open now:** sound outside games; release prep (manager toggle, notes,
+trimming the probe-only code behind probe-ui.txt); a v0.7.13.1 with the
+address-0 fix.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

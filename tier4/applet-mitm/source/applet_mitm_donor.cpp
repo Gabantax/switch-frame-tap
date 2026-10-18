@@ -64,20 +64,15 @@ namespace ams::mitm::applet {
             return false;
         }
 
-        /* v0.7.14: while the HOME menu streams (no game running), other
-         * applets keep it going - the user picker took the Applet pool to
-         * 270 MB of 500 with our 41 (test2) and the stream stopped for it.
-         * Only a web applet, or a pool within 48 MB of full, stops it. A
-         * game's session keeps the earlier rule. */
-        bool HomeMenuRules() {
-            if (!g_ui_stream_armed) { return false; }
-            if (g_ui_session_active.load(std::memory_order_relaxed) || g_app_pid.load(std::memory_order_relaxed) == 0) { return true; }
-            /* v0.7.14 test8: a game that is not on screen (HOME, the Album or
-             * hbmenu in front of it) - test7: the Album over a suspended game
-             * stopped the stream at 363 of 500 MB under the game's rule */
-            const u64 t = g_app_present_tick.load(std::memory_order_relaxed);
-            return t == 0 || armTicksToNs(armGetSystemTick() - t) >= UINT64_C(1000000000);
-        }
+        /* v0.7.14: what the Applet pool says about the stream. Only a web
+         * applet (it may want the whole pool) or a pool within 48 MB of full
+         * stops it. The HOME menu used this from beta1 (the user picker took
+         * the pool to 270 MB of 500 with our 41, test2; System Settings to
+         * 454); games since beta2: they stopped whenever the pool passed
+         * 160 MB, and Super Mario 3D All-Stars runs its games with the pool
+         * at 290-340 MB - the stream waited the whole time (issue #20).
+         * Library applets a game opens still get the memory back first
+         * (PrepareForApplet). */
         constexpr u64 TightMb = 48;
         /* v0.7.14: the smallest donor that streams 720p (capture region
          * >= ~22 MB plus the engine buffers) and the usual one */
@@ -114,16 +109,13 @@ namespace ams::mitm::applet {
                 u64 cur = 0, lim = 0;
                 if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { continue; }
                 const u64 mb = cur >> 20, donor_mb = g_size >> 20;
-                bool trigger = mb > donor_mb + 160;
-                if (HomeMenuRules()) {
-                    /* the pool grew 32 MB since the last look: is it a web applet? */
-                    static u64 checked_mb = 0;
-                    if (mb < checked_mb) { checked_mb = mb; }
-                    const bool tight = (lim >> 20) - mb < TightMb;
-                    bool web = false;
-                    if (mb >= checked_mb + 32 || tight) { checked_mb = mb; web = WebAppletRunning(); }
-                    trigger = web || tight;
-                }
+                /* the pool grew 32 MB since the last look: is it a web applet? */
+                static u64 checked_mb = 0;
+                if (mb < checked_mb) { checked_mb = mb; }
+                const bool tight = (lim >> 20) - mb < TightMb;
+                bool web = false;
+                if (mb >= checked_mb + 32 || tight) { checked_mb = mb; web = WebAppletRunning(); }
+                const bool trigger = web || tight;
                 if (trigger) {
                     LogDefer(true);   /* written once the memory is back (DonorRelease) */
                     g_trigger_ns = armTicksToNs(armGetSystemTick());
@@ -212,16 +204,13 @@ namespace ams::mitm::applet {
     bool AppletBusy(u64 *out_mb) {
         /* idle (home menu and friends) ~96 MB; the browser 290-494 MB of 500.
          * Launching the donor then took 42 MB from under it (test15: a
-         * screenshot inside a manual) */
-        constexpr u64 BusyMb = 160;
+         * screenshot inside a manual). v0.7.14: busy only with a web applet
+         * open or no room for the smallest donor and the margin */
         u64 cur = 0, lim = 0;
         if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { return false; }
         const u64 mb = cur >> 20;
         if (out_mb != nullptr) { *out_mb = mb; }
-        /* v0.7.14: for the HOME menu, busy only with a web applet open or no
-         * room for the donor (its ~42 MB) and the margin */
-        if (HomeMenuRules()) { return WebAppletRunning() || (lim >> 20) - mb < MinDonorMb + TightMb; }
-        return mb > BusyMb;
+        return WebAppletRunning() || (lim >> 20) - mb < MinDonorMb + TightMb;
     }
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
@@ -232,7 +221,7 @@ namespace ams::mitm::applet {
              * of 500 MB without us) the HOME menu streams on a smaller donor,
              * leaving the margin free (test5: 41 MB left 46 - the stream stopped) */
             u32 cap = FullDonorMb;
-            if (HomeMenuRules()) {
+            {
                 const u64 free_mb = AppletFreeMb();
                 const u64 room = free_mb > TightMb ? free_mb - TightMb : 0;
                 cap = room >= FullDonorMb ? FullDonorMb : (room >= MinDonorMb ? static_cast<u32>(room) : MinDonorMb);

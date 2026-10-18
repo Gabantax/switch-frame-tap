@@ -755,6 +755,118 @@ namespace ams::mitm::applet {
             LogLine("uiprobe: layers (%s) done", tag);
         }
 
+        /* ---- probe6: the words that flip between 3 and 4 -----------------
+         * probe5: the word that follows the controller applet's presents
+         * (5848 KB region +0x1760e8) stays put on the HOME menu - it is the
+         * applet's layer's, not the HOME menu's. So search on the HOME menu
+         * itself: every word of vi's data read twice ~9 ms apart; the ones
+         * that went 3 -> 4 or 4 -> 3 are candidates. Then 40 samples, each
+         * with which of slots 3/4 is being drawn (hashed twice ~6 ms apart),
+         * say what each candidate means: equal to the slot being drawn
+         * (read the other one), or to the finished one. */
+        struct FlipCand { u32 reg; u32 off; u16 flips; u8 eq_moving; u8 eq_steady; u8 n3; u8 n4; u8 other; u8 pad; };
+        constexpr u32 MaxFlip = 2048;
+        constinit FlipCand g_flip[MaxFlip] = {};
+
+        void FlipSearch(const char *tag) {
+            u64 pid = 0, base = 0, size = 0;
+            if (!FindViBuffer(std::addressof(pid), std::addressof(base), std::addressof(size))) { return; }
+            FindViRegions(pid, base);
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (const Result ra = ::ams::svc::DebugActiveProcess(std::addressof(dbg), pid); R_FAILED(ra)) { LogLine("uiprobe: flips: attach rc=0x%x", ra.GetValue()); return; }
+            static_cast<void>(DrainContinue(dbg));
+            const u64 t0 = armTicksToNs(armGetSystemTick());
+            u32 n = 0, over = 0, big = 0;
+            u64 big_base = 0, big_size = 0;
+            for (u32 r = 0; r < g_nregs; ++r) {
+                if (g_regs[r].size > big_size) { big = r; big_size = g_regs[r].size; big_base = g_regs[r].addr; }
+                for (u64 off = 0; off < g_regs[r].size; off += SnapChunk) {
+                    const size_t len = static_cast<size_t>(std::min<u64>(SnapChunk, g_regs[r].size - off));
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, g_regs[r].addr + off, len))) { continue; }
+                    os::SleepThread(TimeSpan::FromMilliSeconds(9));
+                    if (R_FAILED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf2), dbg, g_regs[r].addr + off, len))) { continue; }
+                    for (size_t i = 0; i + 4 <= len; i += 4) {
+                        u32 a, b;
+                        std::memcpy(std::addressof(a), g_snap_buf + i, 4);
+                        std::memcpy(std::addressof(b), g_snap_buf2 + i, 4);
+                        if (!((a == 3 && b == 4) || (a == 4 && b == 3))) { continue; }
+                        if (n >= MaxFlip) { ++over; continue; }
+                        g_flip[n++] = { r, static_cast<u32>(off + i), 1, 0, 0, 0, 0, 0, 0 };
+                    }
+                    static_cast<void>(DrainContinue(dbg));
+                }
+            }
+            const u64 t1 = armTicksToNs(armGetSystemTick());
+            auto slot_hash = [&](u32 s) {
+                u64 h = 0;
+                for (size_t off = 0; off < ViSlotSize; off += SnapChunk) {
+                    if (R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(g_snap_buf), dbg, base + s * ViSlotSize + off, SnapChunk))) { h ^= Hash(g_snap_buf, SnapChunk) + off; }
+                }
+                return h;
+            };
+            static u32 last[MaxFlip];
+            for (u32 i = 0; i < n; ++i) { last[i] = 0; }
+            u32 one_moving = 0;
+            for (u32 p = 0; p < 40 && n != 0; ++p) {
+                /* the candidates, then the slots, then the candidates again: kept only if unchanged across */
+                static u32 v1[MaxFlip];
+                for (u32 i = 0; i < n; ++i) { static_cast<void>(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(std::addressof(v1[i])), dbg, g_regs[g_flip[i].reg].addr + g_flip[i].off, 4)); }
+                const u64 a1 = slot_hash(3), b1 = slot_hash(4), a2 = slot_hash(3), b2 = slot_hash(4);
+                const bool m3 = a1 != a2, m4 = b1 != b2;
+                const s32 moving = (m3 && !m4) ? 3 : (m4 && !m3) ? 4 : -1;
+                one_moving += moving >= 0;
+                for (u32 i = 0; i < n; ++i) {
+                    u32 v2 = 0;
+                    static_cast<void>(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(std::addressof(v2)), dbg, g_regs[g_flip[i].reg].addr + g_flip[i].off, 4));
+                    FlipCand &c = g_flip[i];
+                    if (v2 == 3) { ++c.n3; } else if (v2 == 4) { ++c.n4; } else if (c.other < 255) { ++c.other; }
+                    if (p > 0 && v2 != last[i] && c.flips < 65535) { ++c.flips; }
+                    last[i] = v2;
+                    if (moving >= 0 && v1[i] == v2) {
+                        if (static_cast<s32>(v2) == moving) { ++c.eq_moving; } else if (v2 == static_cast<u32>(7 - moving)) { ++c.eq_steady; }
+                    }
+                }
+                static_cast<void>(DrainContinue(dbg));
+                os::SleepThread(TimeSpan::FromMicroSeconds(2000 + 3100 * (p % 5)));
+            }
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+            LogLine("uiprobe: flips (%s): %u words went 3<->4 in ~9 ms (+%u over the cap), search %llu ms; 40 samples, %u with exactly one slot being drawn; the big region is %u (%#llx)",
+                    tag, n, over, static_cast<unsigned long long>((t1 - t0) / 1000000), one_moving, big, static_cast<unsigned long long>(big_base));
+            u32 shown = 0;
+            for (u32 i = 0; i < n && shown < 40; ++i) {
+                const FlipCand &c = g_flip[i];
+                if (c.flips < 6 || c.other > 2) { continue; }
+                ++shown;
+                const u64 va = g_regs[c.reg].addr + c.off;
+                LogLine("   %#llx (%s +%#llx): flipped %u of 39, 3 x%u 4 x%u other x%u; = the slot being drawn %u, = the finished one %u",
+                        static_cast<unsigned long long>(va), c.reg == big ? "big" : "region", static_cast<unsigned long long>(c.reg == big ? va - big_base : c.off),
+                        c.flips, c.n3, c.n4, c.other, c.eq_moving, c.eq_steady);
+            }
+            if (shown == 0) { LogLine("   none flipped with the frames"); }
+        }
+
+        /* the memory around the applet's word (5848 KB region +0x1760e8 in probe5) */
+        void DumpAroundAppletWord(const char *tag) {
+            if (g_nsurv == 0) { return; }
+            const CorrCand &c = g_corr[g_survivors[0]];
+            const u64 va = g_regs[c.reg].addr + c.off;
+            u64 pid = 0, base = 0, size = 0;
+            if (!FindViBuffer(std::addressof(pid), std::addressof(base), std::addressof(size))) { return; }
+            ::ams::svc::Handle dbg = ::ams::svc::InvalidHandle;
+            if (R_FAILED(::ams::svc::DebugActiveProcess(std::addressof(dbg), pid))) { return; }
+            static_cast<void>(DrainContinue(dbg));
+            static u8 win[1024];
+            const bool ok = R_SUCCEEDED(::ams::svc::ReadDebugProcessMemory(reinterpret_cast<uintptr_t>(win), dbg, va - 512, sizeof(win)));
+            static_cast<void>(::ams::svc::CloseHandle(dbg));
+            if (!ok) { return; }
+            LogLine("uiprobe: around the applet's word %#llx (%s), -512..+512:", static_cast<unsigned long long>(va), tag);
+            for (u32 row = 0; row < sizeof(win); row += 32) {
+                u32 w[8];
+                std::memcpy(w, win + row, sizeof(w));
+                LogLine("    %+5d: %08x %08x %08x %08x %08x %08x %08x %08x", static_cast<int>(row) - 512, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+            }
+        }
+
         /* the HOME menu alone, 75 s in; a library applet 4 s after it opened */
         void SnapSteps(u64 now, const Proc *cur, u32 cn) {
             u64 lib = 0;
@@ -766,7 +878,8 @@ namespace ams::mitm::applet {
             if (!g_snap_home_done && lib == 0 && !app && now >= UINT64_C(75000000000)) {
                 g_snap_home_done = true;
                 SnapVi("home");
-                LayerStructs("home", false);
+                FlipSearch("home");
+                if (HasWord("layers")) { LayerStructs("home", false); }
             }
             if (lib != g_applet_tid) { g_applet_tid = lib; g_applet_since_ns = now; }
             if (!g_snap_applet_done && lib != 0 && lib != UINT64_C(0x010000000000100D) && now - g_applet_since_ns >= UINT64_C(4000000000)) {
@@ -775,14 +888,16 @@ namespace ams::mitm::applet {
                 LogLine("uiprobe: %s has been open 4 s (%u shared-layer presents seen so far)", nm != nullptr ? nm : "an applet", g_shared_present.count.load());
                 SnapVi("applet");
                 Correlate();
-                LayerStructs("applet", true);
+                FlipSearch("applet");
+                DumpAroundAppletWord("applet");
             }
             /* the survivors checked on the HOME menu, 3 s after it is alone again */
             const bool home_alone = lib == 0 && !app;
             if (!home_alone) { g_home_alone_since = 0; } else if (g_home_alone_since == 0) { g_home_alone_since = now; }
             if (g_snap_applet_done && !g_verify_done && home_alone && now - g_home_alone_since >= UINT64_C(3000000000)) {
                 g_verify_done = true;
-                LayerStructs("home again", false);
+                FlipSearch("home again");
+                DumpAroundAppletWord("home again");
                 VerifyOnHome();
             }
         }

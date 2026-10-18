@@ -251,6 +251,21 @@ with the last present's slot (applet open) or which of slots 3/4 is steady
 (HOME menu, at 75 s and again after the applet). Slot files now opt-in
 ("files").
 
+**probe5 run (`logs/v0714-probe5`, measured):** the correlation (7 MB, 121
+chunks, 106 candidates) found **one word that follows the controller applet's
+presents exactly**: 5848 KB region +0x1760e8 = the last presented slot (3 or
+4), 20/20 on each, no misses. On the HOME menu alone it does **not** move: its
+"steady 14 / drawn 9" equals exactly how often slot 4 / slot 3 was the one
+moving - it sat at 3. It is the applet's layer's state. The {3,4,-1,-1}
+records (one per shared layer, plus a per-applet state block holding the
+layer handle 0x10) did not change over 16 samples: static configuration.
+
+**probe6 (v0.7.14-probe6):** search on the HOME menu itself: all of vi's data
+read twice ~9 ms apart, words that went 3<->4 kept; 40 samples classify them
+against which of slots 3/4 is being drawn (hash twice) - "= the slot being
+drawn" or "= the finished one". Same search with the applet open (it must find
+the applet's known word - a check of the method) and 1 KB around that word.
+
 **Plan after probe2:** applets first (their traffic is visible now): read
 their slots the way games are read once the owner of the shared buffer is
 known. The HOME menu needs its boot-time dispdrv session: a small boot2 mitm

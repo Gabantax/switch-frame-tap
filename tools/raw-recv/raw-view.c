@@ -491,10 +491,13 @@ enum { CONN_USB = 0, CONN_NET = 1 };
 static int g_conn = CONN_USB;
 static char g_last_ip[64] = "";
 static char g_net_status[128] = "";    /* what the finder is doing, for the menu */
-/* Second viewer / silent TCP: back off instead of connect↔search thrash. */
+/* Second viewer: back off only when the Switch closes us quickly with no
+ * stream (refused / reset). Do NOT treat "connected, waiting for picture"
+ * as busy - that was a false positive after closing every viewer. */
 static Uint64 g_net_busy_until = 0;    /* SDL ticks; 0 = not backing off */
 static int g_net_busy_ms = 0;          /* last backoff length (grows) */
 static int g_net_got_stream = 0;       /* saw stream bytes on this socket */
+static Uint64 g_net_connect_ticks = 0; /* when this TCP session started */
 static char g_ip_edit[32] = "";        /* I: the address being typed */
 static int g_ip_editing = 0;
 static int conn_for_menu(void) { return g_conn; }
@@ -699,7 +702,7 @@ static int net_backing_off(void)
     if (now >= g_net_busy_until) { g_net_busy_until = 0; return 0; }
     const int left = (int)((g_net_busy_until - now + 999) / 1000);
     snprintf(g_net_status, sizeof(g_net_status),
-             "Another viewer is connected - retrying in %d s", left > 0 ? left : 1);
+             "Another viewer may be connected - retrying in %d s", left > 0 ? left : 1);
     return 1;
 }
 
@@ -710,8 +713,8 @@ static void net_mark_busy(void)
     if (g_net_busy_ms > 20000) g_net_busy_ms = 20000;
     g_net_busy_until = SDL_GetTicks64() + (Uint64)g_net_busy_ms;
     snprintf(g_net_status, sizeof(g_net_status),
-             "Another viewer is connected - retrying in %d s", (g_net_busy_ms + 999) / 1000);
-    fprintf(stderr, "\nnetwork: Switch busy (another viewer?) - backing off %d ms\n", g_net_busy_ms);
+             "Another viewer may be connected - retrying in %d s", (g_net_busy_ms + 999) / 1000);
+    fprintf(stderr, "\nnetwork: Switch closed us before any stream - backing off %d ms\n", g_net_busy_ms);
 }
 
 static void net_clear_busy(void)
@@ -720,45 +723,20 @@ static void net_clear_busy(void)
     g_net_busy_ms = 0;
 }
 
-/* True if the socket already has stream bytes waiting (MSG_PEEK). */
-static int net_peek_stream(int ms)
+/* Call when a net session ends with no stream bytes. Quick close = refused by
+ * an already-serving Switch; long wait then drop = normal (no picture yet). */
+static void net_on_lost_without_stream(void)
 {
-    if (g_sock == SOCK_BAD) return 0;
-    const Uint64 t0 = SDL_GetTicks64();
-    snprintf(g_net_status, sizeof(g_net_status), "Connected - waiting for the picture...");
-    for (;;) {
-        SDL_PumpEvents();
-        fd_set rs;
-        FD_ZERO(&rs);
-        FD_SET(g_sock, &rs);
-        const int left = ms - (int)(SDL_GetTicks64() - t0);
-        if (left <= 0) return 0;
-        const int slice = left > 100 ? 100 : left;
-        struct timeval tv = { 0, slice * 1000 };
-        const int r = select((int)g_sock + 1, &rs, NULL, NULL, &tv);
-        if (r < 0) return 0;
-        if (r == 0) continue; /* keep waiting until ms budget */
-        char b;
-        const int n = (int)recv(g_sock, &b, 1, MSG_PEEK);
-        if (n > 0) return 1;
-        return 0; /* closed / reset: not a live stream */
-    }
+    const Uint64 lived = g_net_connect_ticks ? (SDL_GetTicks64() - g_net_connect_ticks) : 0;
+    if (lived > 0 && lived < 1500) net_mark_busy();
+    else net_clear_busy();
 }
 
-/* After TCP connect: require stream data, else close and back off (dual-viewer).
- * Real first connects may need a few seconds for engines; a refused extra
- * (console closes immediately) or silent backlog fails this peek. */
-static int net_confirm_stream(void)
+static void net_session_begin(void)
 {
     g_net_got_stream = 0;
-    if (net_peek_stream(4500)) {
-        g_net_got_stream = 1;
-        net_clear_busy();
-        return 1;
-    }
-    if (g_sock != SOCK_BAD) { sock_close(g_sock); g_sock = SOCK_BAD; g_net_peer[0] = 0; }
-    net_mark_busy();
-    return 0;
+    g_net_connect_ticks = SDL_GetTicks64();
+    net_clear_busy();
 }
 
 static void use_found(sock_t s, uint32_t ip)
@@ -842,10 +820,7 @@ static int net_try_connect(void)
     } else {
         finder_stop();
     }
-    if (!net_confirm_stream()) {
-        finder_start();
-        return 0;
-    }
+    net_session_begin();
     snprintf(g_last_ip, sizeof(g_last_ip), "%s", g_net_peer);
     prefs_save();
     return 1;
@@ -1962,7 +1937,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
             transport_close();
             fprintf(stderr, "\nthe Switch disconnected%s\n", app ? " - waiting for it" : "");
             if (!app) break;
-            if (never_streamed) net_mark_busy();
+            if (never_streamed) net_on_lost_without_stream();
             else net_clear_busy();
             g_menu = 1;
             if (!app_wait_device(ctx, win, ren, tex)) break;
@@ -2364,7 +2339,7 @@ int main(int argc, char **argv)
             transport_close();
             g_lost = 0;
             fprintf(stderr, "\nthe Switch disconnected - waiting for it\n");
-            if (never_streamed) net_mark_busy();
+            if (never_streamed) net_on_lost_without_stream();
             else net_clear_busy();
             if (!app_wait_device(ctx, win, ren, tex)) break;
             g_lost = 0;

@@ -29,10 +29,10 @@ namespace ams::mitm::applet {
         constexpr u16 NetPort = 9950;            /* the stream (TCP) */
         constexpr u16 BeaconPort = 9951;         /* "here I am" (UDP broadcast) */
 
-        /* SysDVR's sizes: a 16 KB TCP send buffer that may grow.
-         * exp/net-ethernet: 320 KB max (was 200) so wired bursts have headroom;
-         * Wi-Fi still starts at TcpTx and only grows under pressure. */
-        constexpr u32 TcpTx = 16 * 1024, TcpTxMax = 320 * 1024, TcpRx = 8 * 1024;
+        /* SysDVR's sizes: a 16 KB TCP send buffer that may grow to 200 KB.
+         * Kept at 200: a larger max grows the static socket tmem for every
+         * user (USB included), and system memory is tight. */
+        constexpr u32 TcpTx = 16 * 1024, TcpTxMax = 200 * 1024, TcpRx = 8 * 1024;
         constexpr u32 UdpTx = 8 * 1024, UdpRx = 4 * 1024, Efficiency = 2;
         constexpr size_t TmemSize = ((TcpTxMax + TcpRx + UdpTx + UdpRx + 0xFFF) & ~size_t(0xFFF)) * Efficiency;
         alignas(0x1000) constinit u8 g_tmem[TmemSize] = {};
@@ -245,10 +245,11 @@ namespace ams::mitm::applet {
                 ++s_clients;
                 LogLine("net: viewer connected from %s (%s)", s,
                         g_net_wired.load(std::memory_order_relaxed) ? "wired" : "wifi");
-                /* Mid-join: force an IDR immediately so the viewer is not stuck
-                 * on colorful P-frame garbage until its first SFTK / next GOP.
-                 * Mark can_ask now; the viewer's own SFTK is still welcome. */
-                g_viewer_can_ask.store(true, std::memory_order_relaxed);
+                /* Mid-join: one IDR now so the viewer is not stuck on P-frame
+                 * garbage. Leave can_ask false until this viewer sends SFTK -
+                 * otherwise Android / older PC viewers would only get keyframes
+                 * every 240 frames on Wi-Fi. */
+                g_viewer_can_ask.store(false, std::memory_order_relaxed);
                 g_viewer_key_request.store(true, std::memory_order_relaxed);
                 LogLine("net: auto keyframe for new viewer");
                 g_client = c;

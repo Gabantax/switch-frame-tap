@@ -143,6 +143,8 @@ static int g_lock_aspect_cli = -1;   /* -1 = use prefs; 0/1 from --no-aspect-loc
 /* Optional borderless window; drag the client area to move. Default off. */
 static int g_chromeless = 0;
 static int g_chromeless_cli = -1;
+/* Keep the viewer above other windows (chrome pin / viewer.ini). */
+static int g_always_on_top = 0;
 static int g_drag_pending = 0, g_dragging = 0;
 static int g_drag_ox, g_drag_oy, g_drag_wx, g_drag_wy;
 static int g_drag_sx, g_drag_sy; /* global mouse at button-down (absolute threshold) */
@@ -154,6 +156,7 @@ static SDL_Texture *g_paint_tex = NULL;
 static void viewer_repaint(void);
 static void window_geom_capture(SDL_Window *win);
 static void window_geom_apply(SDL_Window *win);
+static void apply_always_on_top(SDL_Window *win);
 static void prefs_save(void);
 
 static Uint32 video_window_flags(void)
@@ -488,6 +491,10 @@ enum { CONN_USB = 0, CONN_NET = 1 };
 static int g_conn = CONN_USB;
 static char g_last_ip[64] = "";
 static char g_net_status[128] = "";    /* what the finder is doing, for the menu */
+/* Second viewer / silent TCP: back off instead of connect↔search thrash. */
+static Uint64 g_net_busy_until = 0;    /* SDL ticks; 0 = not backing off */
+static int g_net_busy_ms = 0;          /* last backoff length (grows) */
+static int g_net_got_stream = 0;       /* saw stream bytes on this socket */
 static char g_ip_edit[32] = "";        /* I: the address being typed */
 static int g_ip_editing = 0;
 static int conn_for_menu(void) { return g_conn; }
@@ -520,6 +527,7 @@ static void prefs_load(void)
         if (sscanf(line, "hwdec=%d", &hm) == 1) g_hwdec = hm != 0;
         if (sscanf(line, "lock_aspect=%d", &hm) == 1) g_lock_aspect = hm != 0;
         if (sscanf(line, "chromeless=%d", &hm) == 1) g_chromeless = hm != 0;
+        if (sscanf(line, "always_on_top=%d", &hm) == 1) g_always_on_top = hm != 0;
         if (sscanf(line, "picture=%127s", v) == 1) pic_parse(v);
         if (sscanf(line, "window=%d,%d,%d,%d", &g_geom_x, &g_geom_y, &g_geom_w, &g_geom_h) == 4 &&
             g_geom_w >= 160 && g_geom_h >= 90) g_geom_valid = 1;
@@ -584,6 +592,7 @@ static void window_geom_apply(SDL_Window *win)
 #endif
     }
     if (g_geom_maximized) SDL_MaximizeWindow(win);
+    apply_always_on_top(win);
 }
 
 static void prefs_save(void)
@@ -592,7 +601,7 @@ static void prefs_save(void)
     prefs_path(path, sizeof(path));
     FILE *f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\nchromeless=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_chromeless,
+    fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\nchromeless=%d\nalways_on_top=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_chromeless, g_always_on_top,
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
     if (g_geom_valid)
@@ -683,6 +692,75 @@ static volatile int g_finder_stop = 0;
 static volatile sock_t g_found_sock = SOCK_BAD;
 static char g_found_ip[64] = "";
 
+static int net_backing_off(void)
+{
+    if (!g_net_busy_until) return 0;
+    const Uint64 now = SDL_GetTicks64();
+    if (now >= g_net_busy_until) { g_net_busy_until = 0; return 0; }
+    const int left = (int)((g_net_busy_until - now + 999) / 1000);
+    snprintf(g_net_status, sizeof(g_net_status),
+             "Another viewer is connected - retrying in %d s", left > 0 ? left : 1);
+    return 1;
+}
+
+static void net_mark_busy(void)
+{
+    if (g_net_busy_ms < 3000) g_net_busy_ms = 3000;
+    else if (g_net_busy_ms < 20000) g_net_busy_ms = g_net_busy_ms * 2;
+    if (g_net_busy_ms > 20000) g_net_busy_ms = 20000;
+    g_net_busy_until = SDL_GetTicks64() + (Uint64)g_net_busy_ms;
+    snprintf(g_net_status, sizeof(g_net_status),
+             "Another viewer is connected - retrying in %d s", (g_net_busy_ms + 999) / 1000);
+    fprintf(stderr, "\nnetwork: Switch busy (another viewer?) - backing off %d ms\n", g_net_busy_ms);
+}
+
+static void net_clear_busy(void)
+{
+    g_net_busy_until = 0;
+    g_net_busy_ms = 0;
+}
+
+/* True if the socket already has stream bytes waiting (MSG_PEEK). */
+static int net_peek_stream(int ms)
+{
+    if (g_sock == SOCK_BAD) return 0;
+    const Uint64 t0 = SDL_GetTicks64();
+    snprintf(g_net_status, sizeof(g_net_status), "Connected - waiting for the picture...");
+    for (;;) {
+        SDL_PumpEvents();
+        fd_set rs;
+        FD_ZERO(&rs);
+        FD_SET(g_sock, &rs);
+        const int left = ms - (int)(SDL_GetTicks64() - t0);
+        if (left <= 0) return 0;
+        const int slice = left > 100 ? 100 : left;
+        struct timeval tv = { 0, slice * 1000 };
+        const int r = select((int)g_sock + 1, &rs, NULL, NULL, &tv);
+        if (r < 0) return 0;
+        if (r == 0) continue; /* keep waiting until ms budget */
+        char b;
+        const int n = (int)recv(g_sock, &b, 1, MSG_PEEK);
+        if (n > 0) return 1;
+        return 0; /* closed / reset: not a live stream */
+    }
+}
+
+/* After TCP connect: require stream data, else close and back off (dual-viewer).
+ * Real first connects may need a few seconds for engines; a refused extra
+ * (console closes immediately) or silent backlog fails this peek. */
+static int net_confirm_stream(void)
+{
+    g_net_got_stream = 0;
+    if (net_peek_stream(4500)) {
+        g_net_got_stream = 1;
+        net_clear_busy();
+        return 1;
+    }
+    if (g_sock != SOCK_BAD) { sock_close(g_sock); g_sock = SOCK_BAD; g_net_peer[0] = 0; }
+    net_mark_busy();
+    return 0;
+}
+
 static void use_found(sock_t s, uint32_t ip)
 {
     const int one = 1, rcv = 8 * 1024 * 1024;
@@ -698,6 +776,10 @@ static int finder_main(void *arg)
     (void)arg;
     net_init();
     while (!g_finder_stop && !g_quit && g_found_sock == SOCK_BAD) {
+        if (net_backing_off()) {
+            SDL_Delay(200);
+            continue;
+        }
         if (g_last_ip[0]) {
             struct in_addr ia;
             if (inet_pton(AF_INET, g_last_ip, &ia) == 1) {
@@ -748,6 +830,7 @@ static void finder_stop(void)
 /* the finder, the beacon or a typed address produced a connection? */
 static int net_try_connect(void)
 {
+    if (net_backing_off()) return 0;
     if (g_found_sock != SOCK_BAD) {
         g_sock = g_found_sock;
         g_found_sock = SOCK_BAD;
@@ -758,6 +841,10 @@ static int net_try_connect(void)
         return 0;
     } else {
         finder_stop();
+    }
+    if (!net_confirm_stream()) {
+        finder_start();
+        return 0;
     }
     snprintf(g_last_ip, sizeof(g_last_ip), "%s", g_net_peer);
     prefs_save();
@@ -901,11 +988,30 @@ static void key_send_pending(void)
 static int reader_main(void *arg)
 {
     (void)arg;
+    /* After a Switch reboot the old TCP session often goes half-open: recv
+     * only times out, never errors, so g_lost never trips and --app sits on
+     * the waiting menu until the user toggles USB/network. Treat sustained
+     * silence on an open transport as a disconnect. */
+    Uint64 idle_since = 0;
+    const Uint64 freq = SDL_GetPerformanceFrequency();
     while (!g_quit && !g_rd_stop && !g_lost) {
         key_send_pending();
         sft_hdr_t hdr;
         const int r = read_exact((uint8_t *)&hdr, sizeof(hdr), 100);
-        if (r <= 0) continue;
+        if (r <= 0) {
+            if (g_app && r == 0 && (g_sock != SOCK_BAD || g_usb)) {
+                const Uint64 now = SDL_GetPerformanceCounter();
+                if (!idle_since) { idle_since = now; }
+                else if ((double)(now - idle_since) / (double)freq >= 5.0) {
+                    fprintf(stderr, "\ntransport: no data for 5 s - reconnecting\n");
+                    g_lost = 1;
+                    break;
+                }
+            }
+            continue;
+        }
+        idle_since = 0;
+        g_net_got_stream = 1;
         const Uint64 t = SDL_GetPerformanceCounter();
         if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
         if (hdr.length == 0 || hdr.length > 64u*1024*1024) continue;
@@ -1142,6 +1248,8 @@ static void ren_swap(SDL_Window **winp, SDL_Renderer **renp, SDL_Texture **texp)
     g_ui_disc = NULL; g_ui_disc_ren = NULL;
     if (g_ui_gear) SDL_DestroyTexture(g_ui_gear);
     g_ui_gear = NULL; g_ui_gear_ren = NULL;
+    if (g_ui_pin) SDL_DestroyTexture(g_ui_pin);
+    g_ui_pin = NULL; g_ui_pin_ren = NULL;
     up_reset();
     SDL_DestroyRenderer(*renp);
     *renp = NULL;
@@ -1158,6 +1266,7 @@ static void ren_swap(SDL_Window **winp, SDL_Renderer **renp, SDL_Texture **texp)
         *winp = win;
         if (!win) { fprintf(stderr, "\nSDL window: %s\n", SDL_GetError()); g_quit = 1; return; }
         aspect_hook_window(win);
+        apply_always_on_top(win);
     }
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, want);
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -1314,6 +1423,21 @@ static void act_chromeless(SDL_Window *win, int on)
     apply_chromeless(win);
     hud_toast(g_chromeless ? "Borderless on - drag the picture to move" : "Window frame on");
     fprintf(stderr, "\nchromeless %s\n", g_chromeless ? "on" : "off");
+}
+
+static void apply_always_on_top(SDL_Window *win)
+{
+    if (!win) return;
+    SDL_SetWindowAlwaysOnTop(win, g_always_on_top ? SDL_TRUE : SDL_FALSE);
+}
+
+static void act_always_on_top(SDL_Window *win, int on)
+{
+    g_always_on_top = on != 0;
+    prefs_save();
+    apply_always_on_top(win);
+    hud_toast(g_always_on_top ? "Always on top" : "Always on top off");
+    fprintf(stderr, "\nalways on top %s\n", g_always_on_top ? "on" : "off");
 }
 
 static void act_upscaler(SDL_Renderer *ren, int mode)   /* -1 = the next one */
@@ -1778,10 +1902,12 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         win = SDL_CreateWindow("Switch Frame Tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                1280, 720, video_window_flags());
         aspect_hook_window(win);
+        apply_always_on_top(win);
         ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
         if (!ren) { fprintf(stderr, "SDL window: %s\n", SDL_GetError()); return 1; }
     } else {
         aspect_hook_window(win);
+        apply_always_on_top(win);
     }
     /* v0.3: the sound device (opened paused; audio_packet starts it) */
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
@@ -1831,10 +1957,13 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         if (g_run_secs > 0 && (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq >= g_run_secs) break;
         if (g_lost) {
             /* the Switch left the bus (rebooted, cable out) */
+            const int never_streamed = (g_conn == CONN_NET && !g_net_got_stream);
             reader_stop();
             transport_close();
             fprintf(stderr, "\nthe Switch disconnected%s\n", app ? " - waiting for it" : "");
             if (!app) break;
+            if (never_streamed) net_mark_busy();
+            else net_clear_busy();
             g_menu = 1;
             if (!app_wait_device(ctx, win, ren, tex)) break;
             g_lost = 0;
@@ -2230,10 +2359,13 @@ int main(int argc, char **argv)
     while (!g_quit && (max_frames == 0 || packets < max_frames)) {
         if (g_app && g_lost) {
             /* the Switch left the bus (rebooted, cable out): keep the window */
+            const int never_streamed = (g_conn == CONN_NET && !g_net_got_stream);
             reader_stop();
             transport_close();
             g_lost = 0;
             fprintf(stderr, "\nthe Switch disconnected - waiting for it\n");
+            if (never_streamed) net_mark_busy();
+            else net_clear_busy();
             if (!app_wait_device(ctx, win, ren, tex)) break;
             g_lost = 0;
             reader_start();

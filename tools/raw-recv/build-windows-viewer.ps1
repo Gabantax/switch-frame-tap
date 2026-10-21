@@ -1,7 +1,11 @@
-# Build the Switch Frame Tap Windows viewer and copy it next to the SD build.
+# Build the Switch Frame Tap Windows viewer (local soak helper).
+# Lives next to build-windows.sh under tools/raw-recv/.
 #
 # On first run (or when pieces are missing), downloads the ref\win toolchain:
 #   zig 0.16, SDL2-devel mingw, libusb, FFmpeg LGPL shared (BtbN)
+#
+#   powershell -File tools/raw-recv/build-windows-viewer.ps1
+#   tools\raw-recv\build-windows-viewer.bat
 #
 # Output (default):
 #   E:\Desktop\SwitchU\- Switch Frame Tap -\build\Switch Frame Tap (Windows)
@@ -14,7 +18,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = Split-Path -Parent $PSScriptRoot
+# tools/raw-recv -> repo root (same layout as build-windows.sh)
+$Repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if (-not $Version) {
     $Version = (git -C $Repo describe --tags --always --dirty 2>$null)
     if (-not $Version) { $Version = "local" }

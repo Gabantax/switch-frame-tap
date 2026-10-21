@@ -966,7 +966,10 @@ static int reader_main(void *arg)
     /* After a Switch reboot the old TCP session often goes half-open: recv
      * only times out, never errors, so g_lost never trips and --app sits on
      * the waiting menu until the user toggles USB/network. Treat sustained
-     * silence on an open transport as a disconnect. */
+     * silence as a disconnect once a stream has started - and not while the
+     * waiting/paused menu is up. Over the network the console sends nothing
+     * with no game on screen (status packets are USB-only today), so arming
+     * on the HOME menu would reconnect every 5 s. */
     Uint64 idle_since = 0;
     const Uint64 freq = SDL_GetPerformanceFrequency();
     while (!g_quit && !g_rd_stop && !g_lost) {
@@ -974,7 +977,8 @@ static int reader_main(void *arg)
         sft_hdr_t hdr;
         const int r = read_exact((uint8_t *)&hdr, sizeof(hdr), 100);
         if (r <= 0) {
-            if (g_app && r == 0 && (g_sock != SOCK_BAD || g_usb)) {
+            if (g_app && r == 0 && g_net_got_stream && !g_menu &&
+                (g_sock != SOCK_BAD || g_usb)) {
                 const Uint64 now = SDL_GetPerformanceCounter();
                 if (!idle_since) { idle_since = now; }
                 else if ((double)(now - idle_since) / (double)freq >= 5.0) {
@@ -982,6 +986,8 @@ static int reader_main(void *arg)
                     g_lost = 1;
                     break;
                 }
+            } else {
+                idle_since = 0;
             }
             continue;
         }

@@ -29,6 +29,9 @@ static int text_init(SDL_Renderer *ren)
     if (g_font_tex) {
         SDL_UpdateTexture(g_font_tex, NULL, px, FONT_ATLAS_W * 4);
         SDL_SetTextureBlendMode(g_font_tex, SDL_BLENDMODE_BLEND);
+        /* DPI-aware windows scale the 720p UI; nearest sampling made glyphs look
+         * pixelated/garbled after per-monitor DPI (v0.7.13). Linear matches gear/disc. */
+        SDL_SetTextureScaleMode(g_font_tex, SDL_ScaleModeLinear);
     }
     free(px);
     return g_font_tex ? 0 : -1;

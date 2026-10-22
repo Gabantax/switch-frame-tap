@@ -1,0 +1,30 @@
+name: PC-side checks
+
+# tools/run_pc_tests.sh on every push, pull request and version tag: the
+# module's host unit tests (arm-file parser, early collection, screenshot PNG,
+# slot matcher), the generated headers, the H.264/NVENC/VIC oracles, the
+# viewer build, a stream end to end and an MP4 recording. The module itself
+# needs devkitPro and an Atmosphère tree and is built by tools/make_release.sh.
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential pkg-config zlib1g-dev \
+            libusb-1.0-0-dev libsdl2-dev libavcodec-dev libavutil-dev libavformat-dev \
+            python3-numpy python3-pil python3-av
+      - name: run_pc_tests.sh
+        run: bash tools/run_pc_tests.sh

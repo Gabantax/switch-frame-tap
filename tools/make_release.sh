@@ -20,6 +20,19 @@ if [ -z "$ALLOW_PROBES" ] && grep -qE '^#define SFT_[A-Z_]*PROBE 1' "$REPO"/tier
     echo "a research probe is on (#define SFT_..._PROBE 1) - turn it off, or ALLOW_PROBES=1 for a test build"; exit 1
 fi
 
+# v0.7.14: the version is typed in five places, and a release once shipped
+# with the nacp versions two releases behind (8903086) - they must all say VER
+# (the .nacp ones without a -beta/-test suffix)
+base="${VER%%-*}"
+bad=0
+need() { grep -qE -- "$2" "$REPO/$1" || { echo "  $1 does not say $3"; bad=1; }; }
+need manager/Makefile          "^APP_VERSION[[:space:]]*:=[[:space:]]*${base//./\\.}\$" "APP_VERSION := $base"
+need overlay/Makefile          "^APP_VERSION[[:space:]]*:=[[:space:]]*${base//./\\.}\$" "APP_VERSION := $base"
+need manager/source/main.cpp   "AppVersion[[:space:]]*=[[:space:]]*\"${VER//./\\.}\""   "AppVersion = \"$VER\""
+need overlay/source/main.cpp   "\"v${VER//./\\.}\""                                     "\"v$VER\""
+need tier4/applet-mitm/source/applet_mitm_main.cpp "applet-mitm v${VER//./\\.}: up"     "applet-mitm v$VER: up"
+[ $bad -eq 0 ] || { echo "the version strings do not all say $VER - fix them first"; exit 1; }
+
 echo "== sysmodule"
 MAKEFLAGS="${MAKEFLAGS:--j6}" bash "$REPO/tier4/applet-mitm/build.sh" >/dev/null
 echo "== memory donor"

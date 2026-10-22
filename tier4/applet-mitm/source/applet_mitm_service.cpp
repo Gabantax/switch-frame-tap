@@ -488,7 +488,10 @@ namespace ams::mitm::applet {
                     if (g_procmem_n >= 48) { continue; }
                     e = std::addressof(g_procmem[g_procmem_n++]);
                     *e = { tid, used, used };
-                    if (!first) { len += std::snprintf(line + len, sizeof(line) - len, " new %016llx %llu KB;", static_cast<unsigned long long>(tid), static_cast<unsigned long long>(used / 1024)); }
+                    /* the same room check as below: snprintf returns the length
+                     * it wanted, so without it len could pass the end and the
+                     * next size (sizeof - len) wrap to a huge number */
+                    if (!first && len < static_cast<int>(sizeof(line)) - 64) { len += std::snprintf(line + len, sizeof(line) - len, " new %016llx %llu KB;", static_cast<unsigned long long>(tid), static_cast<unsigned long long>(used / 1024)); }
                     continue;
                 }
                 if (used != e->last && len < static_cast<int>(sizeof(line)) - 64) {

@@ -56,7 +56,11 @@ namespace ams::mitm::applet {
          * pool are the web ones - the browser, the eShop, manuals and news,
          * the Nintendo Account and Wi-Fi login pages */
         bool WebAppletRunning() {
-            static constexpr u64 Web[] = { 0x010000000000100Aull, 0x010000000000100Bull, 0x010000000000100Full, 0x0100000000001010ull, 0x0100000000001011ull };
+            /* firmware 22.0 replaced the shop, web, login and auth applets
+             * with systemWeb (0x1042) and openWeb (0x1043); the old ids are
+             * stubs there (switchbrew 22.0.0) */
+            static constexpr u64 Web[] = { 0x010000000000100Aull, 0x010000000000100Bull, 0x010000000000100Full, 0x0100000000001010ull, 0x0100000000001011ull,
+                                           0x0100000000001042ull, 0x0100000000001043ull };
             for (const u64 id : Web) {
                 os::ProcessId pid{};
                 if (R_SUCCEEDED(::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{id})) && pid.value != 0) { return true; }
@@ -92,6 +96,81 @@ namespace ams::mitm::applet {
         alignas(os::ThreadStackAlignment) constinit u8 g_watch_stack[8_KB];
         constinit os::ThreadType g_watch_thread;
         constinit u64 g_trigger_ns = 0;
+        constinit std::atomic<u64> g_hold_until_ns{0};
+
+        /* v0.7.14: systemWeb (firmware 22+: the eShop, news pages, logins)
+         * asks for its whole memory as it starts - faster than any poll: with
+         * the HOME menu streaming, the eShop opened from HOME aborted with
+         * 2210-1024 and the Applet pool never moved (logs/v0714-p0test1).
+         * While the donor holds Applet memory, pm holds systemWeb back once it
+         * is created (pm:dmnt HookToCreateProcess); the stream stops, the
+         * memory goes back, and only then does it start. One hook slot in pm:
+         * if another tool holds it, the pool watch below is all there is. */
+        constexpr u64 SystemWebProgramId = 0x0100000000001042ull;
+        constexpr u64 WebHookMaxHoldNs = 1'500'000'000ull;
+        constinit os::NativeHandle g_web_hook = os::InvalidNativeHandle;
+        constinit u64 g_web_hook_fired_ns = 0;   /* 0: armed, not fired */
+
+        void StartHookedWeb(const char *memory) {
+            os::ProcessId pid{};
+            ::Result rc = ::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{SystemWebProgramId}).GetValue();
+            if (R_SUCCEEDED(rc)) { rc = ::ams::pm::dmnt::StartProcess(pid).GetValue(); }
+            LogLine("donor: systemWeb started (pid %llu) rc=0x%x - memory %s after %llu ms", static_cast<unsigned long long>(pid.value), rc, memory,
+                    static_cast<unsigned long long>(g_web_hook_fired_ns != 0 ? (armTicksToNs(armGetSystemTick()) - g_web_hook_fired_ns) / 1000000 : 0));
+        }
+
+        void CloseWebHook() {
+            os::CloseNativeHandle(g_web_hook);
+            g_web_hook = os::InvalidNativeHandle;
+            g_web_hook_fired_ns = 0;
+        }
+
+        void WebHookStep() {
+            if (g_web_hook == os::InvalidNativeHandle) {
+                if (!g_mapped || g_pmdmnt_rc != 0) { return; }
+                static bool said = false;
+                os::NativeHandle h = os::InvalidNativeHandle;
+                const ::Result rc = ::ams::pm::dmnt::HookToCreateProcess(std::addressof(h), ncm::ProgramId{SystemWebProgramId}).GetValue();
+                if (R_FAILED(rc)) {
+                    if (!said) { LogLine("donor: no systemWeb launch hook (rc=0x%x, another tool holds pm's hook) - the pool watch only", rc); said = true; }
+                    return;
+                }
+                g_web_hook = h;
+                g_web_hook_fired_ns = 0;
+                return;
+            }
+            const u64 now = armTicksToNs(armGetSystemTick());
+            if (g_web_hook_fired_ns == 0) {
+                if (R_SUCCEEDED(::svcWaitSynchronizationSingle(g_web_hook, 0))) {
+                    static_cast<void>(::svcResetSignal(g_web_hook));
+                    g_web_hook_fired_ns = now;
+                    if (g_mapped) {
+                        LogDefer(true);   /* written once the memory is back (DonorRelease) */
+                        LogLine("donor: systemWeb (eShop, news, a login page) is starting - held until the stream gives the memory back");
+                        g_hold_until_ns.store(now + 4'000'000'000ull, std::memory_order_relaxed);
+                        g_trigger_ns = now;
+                        g_applet_needs_memory.store(true, std::memory_order_relaxed);
+                    }
+                } else if (!g_mapped) {
+                    /* the memory went back for another reason: let pm start
+                     * systemWeb by itself again - unless it fired just now */
+                    static_cast<void>(::pmdmntClearHook(1));
+                    if (R_SUCCEEDED(::svcWaitSynchronizationSingle(g_web_hook, 0))) {
+                        static_cast<void>(::svcResetSignal(g_web_hook));
+                        StartHookedWeb("not held");
+                    }
+                    CloseWebHook();
+                }
+                return;
+            }
+            /* fired: start it once the memory is back - and never hold it
+             * longer than 1.5 s, whatever the stream does */
+            if (!g_mapped || now - g_web_hook_fired_ns >= WebHookMaxHoldNs) {
+                if (!g_mapped) { os::SleepThread(TimeSpan::FromMilliSeconds(15)); }   /* the donor frees its heap ~5 ms after the unmap */
+                StartHookedWeb(g_mapped ? "STILL HELD" : "given back");
+                CloseWebHook();   /* pm cleared the hook when it fired */
+            }
+        }
 
         /* Every 100 ms while the donor's memory is mapped: the Applet group
          * past idle plus the donor means an applet started. Test16's browser
@@ -100,6 +179,7 @@ namespace ams::mitm::applet {
         void AppletWatchThread(void *) {
             for (;;) {
                 os::SleepThread(TimeSpan::FromMilliSeconds(20));
+                WebHookStep();
                 if (g_applet_needs_memory.load(std::memory_order_relaxed)) {
                     /* the teardown never reached DonorRelease: write the log anyway */
                     if (armTicksToNs(armGetSystemTick()) - g_trigger_ns > 3'000'000'000ull) { LogDefer(false); }
@@ -125,10 +205,6 @@ namespace ams::mitm::applet {
                 }
             }
         }
-    }
-
-    namespace {
-        constinit std::atomic<u64> g_hold_until_ns{0};
     }
 
     bool AppletHoldActive() { return armTicksToNs(armGetSystemTick()) < g_hold_until_ns.load(std::memory_order_relaxed); }

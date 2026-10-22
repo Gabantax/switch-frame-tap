@@ -113,12 +113,14 @@ namespace ams::mitm::applet {
     /* v0.7.12 (PR #12): early collection of the previous encode in the
      * pipelined (1080p) stream - 0 off, 1 on, 2 A/B (alternate every 600
      * frames and log the console's present-to-send time for each) */
-    extern u32 g_early_collect;
+    /* (this one and g_detach_on_home are read while a session runs, and the
+     * manager's ReloadConfig rewrites them from another thread: atomics) */
+    extern std::atomic<u32> g_early_collect;
     extern bool g_live_armed;     /* M86: stream whenever a viewer and a game are there */
     /* Default on: end the live session when queueBuffer stalls (HOME), free
      * donor memory, then RunLive reattaches on the next present. nodethome
      * disables it. */
-    extern bool g_detach_on_home;
+    extern std::atomic<bool> g_detach_on_home;
     extern bool g_nv1080_armed;   /* M90: 1080p encoder probe (frame 0, GOP, timed) */
     extern u32  g_nv1080_n;
     extern bool g_anyfw_armed;    /* M98: capture on firmware this build was not tested on */

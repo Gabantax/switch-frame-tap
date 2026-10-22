@@ -95,7 +95,7 @@ namespace ams::mitm::applet {
     /* Default on: release the debug attach when the game stops presenting so
      * HOME / Album is not fighting an active capture session. Set
      * detach_on_home=0 (arm "nodethome") to keep showing the suspended game. */
-    constinit bool g_detach_on_home = true;
+    constinit std::atomic<bool> g_detach_on_home{true};
     constinit bool g_nv1080_armed  = false;
     constinit bool g_cap720_armed  = false;
     constinit bool g_anyfw_armed   = false;
@@ -157,12 +157,10 @@ namespace ams::mitm::applet {
          * full frame (8,294,400 B). It now starts past a whole slot. */
         constexpr size_t FbSlotBytes     = 8847360;
         constexpr size_t FbBlockRowStage = FbSlotBytes;
-        /* M62: 0x220000 so a 960x540 frame (2,073,600 B) fits. Ceiling is the
-         * 16 MB heap: VicBufsEnd + FbSlotBytes + 3 * StreamStageSize must stay
-         * under g_ind_size (15,597,568), which caps this at ~2,250,000. */
+        /* M62: 0x220000 so a 960x540 frame (2,073,600 B) fits. (The 16 MB
+         * heap this was once sized against is gone: the capture region is the
+         * donor's memory, and MinCaptureBytes below is what it must hold.) */
         constexpr size_t StreamStageSize = 0x220000;   /* per stream stage buffer */
-        static_assert(0x360000 + 8847360 + 3 * StreamStageSize <= 24u * 1024 * 1024,
-                      "vic buffers + slot + stage buffers must fit the heap");
         constinit size_t g_vic_heap_size = 0;
 
         /* The capture buffer stays on the HEAP, deliberately.
@@ -191,6 +189,15 @@ namespace ams::mitm::applet {
          * of .bss in the System group the boot needs (#15) */
         constexpr size_t AudioStageSize = 32 * 1024;   /* ~170 ms - more than a frame ever carries */
         constexpr size_t CaptureTailBytes = ShotOutBufSize + AudioStageSize + AudioRingBytes;
+        /* v0.7.14: what a donor's capture region must hold - a whole slot copy,
+         * the stream stages CaptureAcquire points past it, and the tail. The
+         * donor's smallest size (tier4/donor/source/main.c sizes_mb[], less its
+         * 256 KB of nvdrv transfer memory) has to cover it with the engine
+         * buffers. */
+        constexpr size_t MinCaptureBytes = FbBlockRowStage + 3 * StreamStageSize + CaptureTailBytes;
+        constexpr size_t SmallestDonorBytes = 22 * 1024 * 1024 - 0x40000;
+        static_assert(VicBaseHeap + MinCaptureBytes <= SmallestDonorBytes,
+                      "the donor's smallest size must hold the engine buffers and the capture region");
         constinit u8       *g_shot_out    = nullptr;
         constinit u8       *g_audio_stage = nullptr;
         constinit u8       *g_audio_ring  = nullptr;
@@ -267,12 +274,10 @@ namespace ams::mitm::applet {
                 uintptr_t daddr = 0;
                 size_t dsize = 0;
                 if (DonorObtain(std::addressof(daddr), std::addressof(dsize))) {
-                    /* v0.7.14: room for a whole slot copy and both stream
-                     * stages (CaptureAcquire points past them) and the tail -
-                     * the gate was 6 MB, and a 12-20 MB donor (its ladder
-                     * descends when the Applet pool refuses a size) let the
+                    /* v0.7.14: room for MinCaptureBytes - the gate was 6 MB,
+                     * and a 12-20 MB donor (a donor before v0.7.14 descends
+                     * that far when the Applet pool refuses a size) let the
                      * first frame's read run past the capture region */
-                    constexpr size_t MinCaptureBytes = FbBlockRowStage + 3 * StreamStageSize + CaptureTailBytes;
                     if (dsize >= VicBaseHeap + MinCaptureBytes) {
                         g_donor_mode = true;
                         SetVicLayout(daddr, VicBaseHeap);
@@ -1531,7 +1536,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<u64> g_queue_tick{0};
     constinit std::atomic<u32> g_queue_fence_n{0};
     constinit bool g_nvab_armed = false;
-    constinit u32 g_early_collect = 1;
+    constinit std::atomic<u32> g_early_collect{1};
     constinit std::atomic<u32> g_queue_transform{0};
     constinit std::atomic<u32> g_queue_crop_wh{0};
     constinit std::atomic<bool> g_queue_crop_origin0{true};
@@ -2019,9 +2024,15 @@ namespace ams::mitm::applet {
             g_blit_done.store(false);
             g_rearm.store(true);
             LogLine("   engines closed, the donor's memory given back - set up again when a viewer connects");
+            /* 5 s, doubling to a minute while it keeps failing: each try
+             * starts the donor and takes its memory */
+            static u32 retry_s = 5;
             if (g_setup_failed) {
-                LogLine("   engines: the setup failed - trying again in 5 s");
-                os::SleepThread(TimeSpan::FromSeconds(5));
+                LogLine("   engines: the setup failed - trying again in %u s", retry_s);
+                os::SleepThread(TimeSpan::FromSeconds(retry_s));
+                retry_s = retry_s >= 30 ? 60 : retry_s * 2;
+            } else {
+                retry_s = 5;
             }
         }
         g_setup_failed = false;

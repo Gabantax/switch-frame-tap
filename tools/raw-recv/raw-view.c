@@ -357,8 +357,10 @@ static void sock_nonblock(sock_t s, int on)
 
 /* connect to many addresses at once, ms to answer; the first that does (on
  * the console's port) comes back connected and blocking, the rest closed */
+static int g_last_refused = 0;      /* the last connect_any: a host said no (nothing listening) */
 static sock_t connect_any(const uint32_t *ips, int n, int port, int ms, uint32_t *which)
 {
+    g_last_refused = 0;
     sock_t sk[64];
     uint32_t sip[64];
     int m = 0;
@@ -392,7 +394,14 @@ static sock_t connect_any(const uint32_t *ips, int n, int port, int ms, uint32_t
             int err = 1; socklen_t el = sizeof(err);
             getsockopt(sk[i], SOL_SOCKET, SO_ERROR, (char *)&err, &el);
             if (err == 0) { won = sk[i]; sk[i] = SOCK_BAD; if (which) *which = sip[i]; }
-            else { sock_close(sk[i]); sk[i] = SOCK_BAD; }
+            else {
+#ifdef _WIN32
+                if (err == WSAECONNREFUSED) g_last_refused = 1;
+#else
+                if (err == ECONNREFUSED) g_last_refused = 1;
+#endif
+                sock_close(sk[i]); sk[i] = SOCK_BAD;
+            }
         }
     }
     for (int i = 0; i < m; i++) if (sk[i] != SOCK_BAD) sock_close(sk[i]);
@@ -449,6 +458,11 @@ static int finder_main(void *arg)
                 snprintf(g_net_status, sizeof(g_net_status), "Trying %s (the last address)...", g_last_ip);
                 sock_t s = connect_any(&ip, 1, NET_PORT, 700, &w);
                 if (s != SOCK_BAD) { use_found(s, w); break; }
+                /* refused: the Switch is there but set to USB (#24) */
+                if (g_last_refused) {
+                    snprintf(g_net_status, sizeof(g_net_status), "%.15s is there but set to USB - choose Network on the Switch, then restart it", g_last_ip);
+                    for (int t = 0; t < 40 && !g_finder_stop && !g_quit; t++) SDL_Delay(100);
+                }
             }
         }
         const uint32_t me = local_ip();

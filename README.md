@@ -197,7 +197,7 @@ manager app:
 | A Switch running **Atmosphère** custom firmware | [Atmosphère releases](https://github.com/Atmosphere-NX/Atmosphere/releases) - tested with 1.11.2 on firmware 22.5.0 (Mariko); users report 23.0.0 (Atmosphère 1.12.0, since v0.7.11), 22.0.0 (Atmosphère 1.11.1) and 21.0.1 working. New to custom firmware: the [NH Switch Guide](https://switch.hacks.guide/). Keep a NAND backup. |
 | The **homebrew menu** | Comes with Atmosphère (`hbmenu.nro`); also [nx-hbmenu releases](https://github.com/switchbrew/nx-hbmenu/releases). It opens the manager app. |
 | A **Windows or Linux PC** | Windows 10/11: the viewer zip, plus the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie/). Linux: `libusb`, `SDL2`, `libavcodec` - one `apt install` line. Both [below](#install). In [webcam mode](#webcam-mode), no viewer or driver: OBS reads it as a camera. |
-| A **USB-C cable**, or a **network** | USB 2.0 is plenty; over USB the Switch stays in handheld (the dock owns the port). [Network streaming](#network-streaming-play-docked) needs no cable and works docked: Wi-Fi or the dock's LAN port, the PC on the same network. |
+| A **USB-C cable**, or a **network** | USB 2.0 is plenty; over USB the Switch stays in handheld (the dock owns the port). Use a **USB-C to USB-A** cable into a USB-A port: with a USB-C to USB-C cable the Switch can take the host role, as it does for a controller, and the PC never sees it. [Network streaming](#network-streaming-play-docked) needs no cable and works docked: Wi-Fi or the dock's LAN port, the PC on the same network. |
 
 **Optional** - one per feature. Since v0.7.5 the manager app's **Get extras**
 installs each of them from its author's GitHub release (see
@@ -555,7 +555,8 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
 - **1080p60 wants CPU 1785 MHz.** The frame copy runs on the CPU; at the stock
   1020 MHz it is slower and 1080p runs a little below 60 (still playable).
 - **Homebrew:** apps that run as applets (the homebrew menu from the album)
-  are not streamed - use a forwarder or title override. Apps with anti-debug
+  are not streamed by v0.7.13.1 - use a forwarder or title override; the
+  v0.7.14 beta streams them with **HOME menu (beta)** on. Apps with anti-debug
   protection (TiCo) cannot be streamed; exclude them. Homebrew cannot be
   forced into docked mode.
 - **A handful of games tested:** Mario Kart 8 Deluxe, Zelda: Breath of the
@@ -606,6 +607,15 @@ Turn off **Start with the console** in the manager and reboot; or delete
 card on a PC; or boot
 holding **Volume Up**, which makes Atmosphère skip `contents` sysmodules.
 Nothing here touches NAND or the bootloader. Keep a NAND backup anyway.
+
+**USB: the viewer waits, and the log says "host did NOT configure us".**
+The PC never set up the Switch's port - most often a USB-C to USB-C cable,
+which can make the Switch the host. Use a USB-C to USB-A cable into a USB-A
+port ([#22](https://github.com/TomasUribe/switch-frame-tap/issues/22)).
+
+**Network: "connection refused".** The Switch is set to USB. Set
+**Connection** to **Network** in the manager or the overlay and restart the
+console - the connection is chosen once per boot ([#24](https://github.com/TomasUribe/switch-frame-tap/issues/24)).
 
 Read the SD card through a card reader or Hekate's USB mass storage, **not
 MTP**: MTP returns I/O errors on a log whose tail was cut by a forced
@@ -814,9 +824,10 @@ dock works over the network since v0.7.0, with the quality adapting to the link.
 | Firmware 23 (built against Atmosphère 1.12); macOS viewer; Linux viewer for any distribution | **done** (v0.7.11; 23.0.0 and macOS confirmed by users) |
 | HOME menu while streaming (browser applets get their memory back), USB released while streaming is off | **done, on hardware** (v0.7.11) |
 | Viewer: one-thread low-delay decode, vsync toggle, GPU upscaling (FSR 1, NIS, RTX VSR on Windows) | **done, on hardware** (v0.7.11) |
-| Hardware decode in the viewer (D3D11VA, VideoToolbox) | next |
+| Hardware decode in the viewer (VAAPI/NVDEC on Linux, D3D11VA on Windows; VideoToolbox on macOS, off by default there) | **done, on hardware** (v0.7.12; Windows v0.7.13) |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
-| Home menu and system overlays | not possible through any route found |
+| The HOME menu and the system screens (System Settings, the user picker, the homebrew menu from the Album) | **beta** (v0.7.14-beta1, opt-in: **HOME menu (beta)** in the manager; no sound there yet) |
+| System overlays (the volume bar, notifications) and Tesla/Ultrahand in the stream | research: their pixels are found and decoded (v0.7.14 probe 1); blending them in on the console is being tested |
 
 ## Layout
 

@@ -989,11 +989,11 @@ namespace ams {
                                       srrc);
                 mitm::applet::LogLine("   %s", neg == UsbDeviceSpeed_Super
                     ? "SuperSpeed: NV12 1080p60 (178 MiB/s) is within reach"
-                    : "not SuperSpeed - check the CABLE is USB 3.0, and that the PC port is blue/SS");
+                    : "High Speed (USB 2.0) - all the stream needs");
             }
             mitm::applet::LogLine("   %s", best == UsbState_Configured
                 ? "*** HOST CONFIGURED US - we own the bus, expect 1209:5f1e in lsusb ***"
-                : "host did NOT configure us - bus owned by someone else, or no cable attached");
+                : "host did NOT configure us - no cable, or the PC is not the host: a USB-C to USB-C cable can make the Switch the host; use USB-C to USB-A (#22)");
         }
 
         Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {

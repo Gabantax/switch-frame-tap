@@ -138,6 +138,10 @@ final class StreamEngine {
         }
         return null;
     }
+    /** The address answered, but nothing listens there: the Switch is set to USB. */
+    static final class RefusedException extends IOException {
+        RefusedException(String message, Throwable cause) { super(message, cause); }
+    }
     private Transports.Tcp tcp(String host, int port) throws IOException {
         Transports.Tcp tcp = new Transports.Tcp(); source = tcp;
         try {
@@ -148,7 +152,13 @@ final class StreamEngine {
             rememberedAddress = host;
             listener.connectedAddress(host);
             return tcp;
-        } catch (IOException e) { tcp.close(); source = null; throw e; }
+        } catch (IOException e) {
+            tcp.close(); source = null;
+            // refused: the Switch is there, but set to USB (#24)
+            if (String.valueOf(e.getMessage()).contains("ECONNREFUSED"))
+                throw new RefusedException("The Switch at " + host + " answered but is not streaming over the network: set Connection to Network on the Switch and restart it", e);
+            throw e;
+        }
     }
     private SftProtocol.Source networkConnect() throws IOException {
         if (!address.isEmpty()) {
@@ -163,12 +173,16 @@ final class StreamEngine {
             beacon.bind(new InetSocketAddress(Transports.BEACON));
             beacon.setSoTimeout(400);
             long nextTry = 0;
+            String hint = null;
             while (!stopped) {
                 if (SftProtocol.ipv4(recent) && System.nanoTime() >= nextTry) {
                     try { return tcp(recent, Transports.PORT); }
-                    catch (IOException e) { nextTry = System.nanoTime() + 3_000_000_000L; }
+                    catch (IOException e) {
+                        nextTry = System.nanoTime() + 3_000_000_000L;
+                        hint = e instanceof RefusedException ? e.getMessage() : null;
+                    }
                 }
-                status("Searching for the Switch on the network. Enter its IP address if it is not found.");
+                status(hint != null ? hint : "Searching for the Switch on the network. Enter its IP address if it is not found.");
                 byte[] bytes = new byte[256];
                 DatagramPacket packet = new DatagramPacket(bytes, bytes.length);
                 try {

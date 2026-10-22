@@ -25,6 +25,9 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q build-essential pkg-config zlib1g-dev \
             libusb-1.0-0-dev libsdl2-dev libavcodec-dev libavutil-dev libavformat-dev \
-            python3-numpy python3-pil python3-av
+            python3-numpy python3-pil python3-pip
+          # PyAV from PyPI: the checks read VideoFrame.colorspace (PyAV 13+;
+          # Ubuntu's python3-av is older). 17.1.0 is what they run with here.
+          pip3 install --user --break-system-packages av==17.1.0
       - name: run_pc_tests.sh
         run: bash tools/run_pc_tests.sh

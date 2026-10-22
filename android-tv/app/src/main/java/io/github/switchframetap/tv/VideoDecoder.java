@@ -31,10 +31,21 @@ final class VideoDecoder implements AutoCloseable {
     private final MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
     private final Map<Long, Stamp> stamps = new LinkedHashMap<>();
     private final Set<String> failedCodecs = new HashSet<>();
+    // decoders that kept up only without the low-latency/priority keys tried first
+    private final Set<String> slowWhenOptimized = new HashSet<>();
     private String codecName = "";
+    private boolean codecOptimized;
+    // throughput watch: a decoder that gives a frame for every few it is fed
+    // (#27: c2.amlogic.avc.decoder showed 1 fps of a 60 fps stream) is replaced
+    private long watchStartNs, watchInputs, watchDecoded;
+    private int alternatives;   // plainer settings or other decoders left to try; 0: keep this one
     private int width, height;
     private long lastPts, ptsOriginNs, firstInputNs, lastOutputNs;
     private int inputsSinceOutput;
+    /** Decoding far fewer frames than arrive: try it plainer, or another decoder. */
+    private static final class SlowDecoderException extends IOException {
+        SlowDecoderException(String message) { super(message); }
+    }
     private static final class Stamp {
         final long receivedNs, ageUs;
         Stamp(SftProtocol.Packet p) { receivedNs = p.receivedNs; ageUs = p.consoleAgeUs; }
@@ -89,13 +100,17 @@ final class VideoDecoder implements AutoCloseable {
                     codec.queueInputBuffer(index, 0, pending.data.length, pts, 0);
                     stats.inputSubmitted++; inputsSinceOutput++;
                     if (firstInputNs == 0) firstInputNs = System.nanoTime();
+                    checkThroughput();
                     long progress = lastOutputNs == 0 ? firstInputNs : lastOutputNs;
                     if (inputsSinceOutput >= 8 && System.nanoTime() - progress > 1_500_000_000L)
                         throw new IOException("The decoder accepts input but produces no video output");
                     inputWaitNs = System.nanoTime(); pending = null; configuredPacket = null;
                 } catch (IOException | RuntimeException e) {
                     stats.decoderErrors++;
-                    if (codec != null) failedCodecs.add(codecName);
+                    if (codec != null) {
+                        if (e instanceof SlowDecoderException && codecOptimized) slowWhenOptimized.add(codecName);
+                        else failedCodecs.add(codecName);
+                    }
                     releaseCodec(); queue.recover(); pending = null; configuredPacket = null;
                     status.accept("Video: " + e.getMessage() + ". Waiting for another keyframe…");
                     Log.w("SFT-TV", "Video", e);
@@ -128,8 +143,9 @@ final class VideoDecoder implements AutoCloseable {
         }
         Collections.sort(candidates, (a,b) -> Integer.compare(score(a), score(b)));
         String lastFailure = "No H.264 decoder is available for " + width + "×" + height;
-        for (MediaCodecInfo item : candidates) {
-            for (int optimized = 1; optimized >= 0; optimized--) {
+        for (int i = 0; i < candidates.size(); i++) {
+            MediaCodecInfo item = candidates.get(i);
+            for (int optimized = slowWhenOptimized.contains(item.getName()) ? 0 : 1; optimized >= 0; optimized--) {
                 MediaCodec attempt = null;
                 try {
                     MediaFormat format = MediaFormat.createVideoFormat(MIME, width, height);
@@ -146,7 +162,8 @@ final class VideoDecoder implements AutoCloseable {
                     }
                     attempt = MediaCodec.createByCodecName(item.getName());
                     attempt.configure(format, surface, null, 0); attempt.start();
-                    codec = attempt; codecName = item.getName();
+                    codec = attempt; codecName = item.getName(); codecOptimized = optimized == 1;
+                    watchStartNs = 0; alternatives = optimized + (candidates.size() - 1 - i);
                     stats.width = width; stats.height = height;
                     stats.decoder = codecName + (software(item) ? " · software" : " · hardware")
                             + (optimized == 1 && lowLatency(item) ? " · low latency" : "");
@@ -159,6 +176,19 @@ final class VideoDecoder implements AutoCloseable {
             }
         }
         throw new IOException(lastFailure);
+    }
+    /** Every 2 s of feeding: fewer than a third of the frames decoded is a decoder
+     *  that cannot keep up (the first 2 s after a start are its warm-up). */
+    private void checkThroughput() throws SlowDecoderException {
+        long now = System.nanoTime();
+        if (watchStartNs == 0) { watchStartNs = now + 2_000_000_000L; return; }
+        if (now < watchStartNs) { watchInputs = stats.inputSubmitted; watchDecoded = stats.decoded; return; }
+        if (now - watchStartNs < 2_000_000_000L) return;
+        long in = stats.inputSubmitted - watchInputs, out = stats.decoded - watchDecoded;
+        watchStartNs = now; watchInputs = stats.inputSubmitted; watchDecoded = stats.decoded;
+        if (alternatives > 0 && in >= 40 && out * 3 < in)
+            throw new SlowDecoderException(codecName + " decoded " + out + " of " + in + " frames"
+                    + (codecOptimized ? "; trying it without low-latency mode" : "; trying another decoder"));
     }
     private static int score(MediaCodecInfo item) { return software(item) ? 2 : lowLatency(item) ? 0 : 1; }
     private void drain() {

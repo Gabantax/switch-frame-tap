@@ -267,7 +267,13 @@ namespace ams::mitm::applet {
                 uintptr_t daddr = 0;
                 size_t dsize = 0;
                 if (DonorObtain(std::addressof(daddr), std::addressof(dsize))) {
-                    if (dsize >= VicBaseHeap + 6_MB) {
+                    /* v0.7.14: room for a whole slot copy and both stream
+                     * stages (CaptureAcquire points past them) and the tail -
+                     * the gate was 6 MB, and a 12-20 MB donor (its ladder
+                     * descends when the Applet pool refuses a size) let the
+                     * first frame's read run past the capture region */
+                    constexpr size_t MinCaptureBytes = FbBlockRowStage + 3 * StreamStageSize + CaptureTailBytes;
+                    if (dsize >= VicBaseHeap + MinCaptureBytes) {
                         g_donor_mode = true;
                         SetVicLayout(daddr, VicBaseHeap);
                         g_vic_heap_size = dsize;
@@ -275,7 +281,7 @@ namespace ams::mitm::applet {
                                 dsize >> 20, static_cast<unsigned long>(daddr), VicBaseHeap >> 20, (dsize - VicBaseHeap) >> 20);
                         return true;
                     }
-                    LogLine("   donor gave only %zu MB", dsize >> 20);
+                    LogLine("   donor gave only %zu MB (streaming needs %zu)", dsize >> 20, (VicBaseHeap + MinCaptureBytes + 0xFFFFF) >> 20);
                     DonorRelease();
                 } else {
                     LogLine("   no donor");
@@ -1594,6 +1600,21 @@ namespace ams::mitm::applet {
         /* v0.7.10: RunVicBlit gave the donor's memory back - run it again (it
          * waits for the next viewer) */
         constinit std::atomic<bool> g_rearm{false};
+        /* v0.7.14: the engine setup failed - wait before the worker re-arms,
+         * so a lasting refusal does not launch and end the donor in a loop */
+        constinit bool g_setup_failed = false;
+        /* test: sdmc:/config/switch-frame-tap/fault-nv.txt fails the first
+         * engine setup of the boot at the nvdrv transfer memory, to check the
+         * recovery (the stream should start again ~5 s later) */
+        bool FaultInjectNvTmemOnce() {
+            static bool done = false;
+            if (done) { return false; }
+            done = true;
+            fs::DirectoryEntryType t;
+            if (R_FAILED(fs::GetEntryType(std::addressof(t), "sdmc:/config/switch-frame-tap/fault-nv.txt"))) { return false; }
+            LogLine("   test: fault-nv.txt - failing this engine setup once");
+            return true;
+        }
         constinit s32 g_last_slot = 0;
         alignas(os::ThreadStackAlignment) constinit u8 g_vic_stack[24_KB];   /* v0.7.13: 32, 10 used streaming with screenshots */
         constinit os::ThreadType g_vic_thread;
@@ -1685,6 +1706,8 @@ namespace ams::mitm::applet {
          * another process's buffer plausibly needs the aruid bits we lack. */
         ::Result rc = 0;
         const char *nv_svc = "nvdrv:t";
+        /* v0.7.14: up here so the failures below can jump to close_sess */
+        u64 &nv_tmem_size = g_nv_tmem_size;
         {
             SmUse sm_nv;   /* v0.7.10: sm only for this (the live loop never returns) */
             rc = smGetService(std::addressof(g_nv_srv), "nvdrv:t");
@@ -1695,13 +1718,16 @@ namespace ams::mitm::applet {
             }
         }
         LogLine("   using %s rc=0x%x", nv_svc, rc);
-        if (R_FAILED(rc)) { VicStage("vb:1_FAILED"); return; }
+        /* v0.7.14: a failed setup goes through close_sess like the later
+         * ones - a bare return kept g_blit_done set and the donor's memory
+         * held, so nothing streamed (and the browser applets had no memory)
+         * until a reboot. close_sess frees the donor and re-arms the worker. */
+        if (R_FAILED(rc)) { VicStage("vb:1_FAILED"); g_setup_failed = true; goto close_sess; }
 
         VicStage("vb:2_tmem");
-        u64 &nv_tmem_size = g_nv_tmem_size;
-        if (!DonorTakeNvTmem(std::addressof(g_nv_tmem_handle), std::addressof(nv_tmem_size))) {
+        if (FaultInjectNvTmemOnce() || !DonorTakeNvTmem(std::addressof(g_nv_tmem_handle), std::addressof(nv_tmem_size))) {
             LogLine("   nvdrv transfer memory: none came with the donor's memory - no engines");
-            VicStage("vb:2_FAILED"); serviceClose(std::addressof(g_nv_srv)); return;
+            VicStage("vb:2_FAILED"); g_setup_failed = true; goto close_sess;
         }
 
         VicStage("vb:3_Initialize");
@@ -1993,7 +2019,12 @@ namespace ams::mitm::applet {
             g_blit_done.store(false);
             g_rearm.store(true);
             LogLine("   engines closed, the donor's memory given back - set up again when a viewer connects");
+            if (g_setup_failed) {
+                LogLine("   engines: the setup failed - trying again in 5 s");
+                os::SleepThread(TimeSpan::FromSeconds(5));
+            }
         }
+        g_setup_failed = false;
     }
 
         /* ---- vi indirect-layer capture ------------------------------------
@@ -6003,6 +6034,17 @@ namespace ams::mitm::applet {
             bool ReadSlot(::ams::svc::Handle dbg, u64 base, u64 *read_ns, u32 *sig) {
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 last_read = base;
+                /* v0.7.14: never past the capture region (the first frame is
+                 * read before Open checks the region's size) */
+                {
+                    const size_t need = CornerFast() ? (CornerBlockRows - 1) * static_cast<size_t>(FbBlockRow) + CornerBlockRowBytes
+                                                     : static_cast<size_t>(ReadBytes());
+                    if (g_ind_buf == nullptr || need > g_ind_size) {
+                        static bool said = false;
+                        if (!said) { LogLine("   slot read of %zu KB refused: the capture region is %zu KB", need / 1024, g_ind_size / 1024); said = true; }
+                        return false;
+                    }
+                }
                 if (CornerFast()) {
                     for (u32 br = 0; br < CornerBlockRows; ++br) {
                         u8 *dst = g_ind_buf + br * FbBlockRow;

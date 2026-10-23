@@ -77,7 +77,7 @@ echo "== compiling"
     "$W/sdl2/x86_64-w64-mingw32/lib/libSDL2.dll.a" \
     "$W/libusb/MinGW64/static/libusb-1.0.dll.a" \
     "${FF_LIBS[@]}" \
-    -lshell32 -lws2_32 \
+    -lshell32 -lws2_32 -ladvapi32 -luser32 \
     -Wl,--subsystem,windows \
     -o "$B/SwitchFrameTap.exe"
 

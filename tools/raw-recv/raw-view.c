@@ -32,6 +32,9 @@
  *                              # (viewer.ini hwdec=0 too; the GPU is the default)
  *   ./raw-view --file s.sft --paced --upscaler fsr   # v0.7.11: GPU upscaling (off/fsr/nis;
  *                              # U cycles it, remembered in viewer.ini)
+ *                              # v0.7.15: + lossless on Windows - Lossless Scaling (lossless.h)
+ *   ./raw-view --lsfg 1        # v0.7.15 (Linux): LSFG frame generation through lsfg-vk,
+ *                              # OpenGL on Zink (G / Settings; viewer.ini lsfg=); set up in lsfg-vk-ui
  *   ./raw-view --net 192.168.1.23   # v0.7: the stream over the network (the console
  *                              # with network streaming on); --app finds it by itself
  *   ./raw-view --no-aspect-lock  # free resize (Windows default locks to 16:9 via WM_SIZING;
@@ -84,6 +87,7 @@
 #endif
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
+#include "sdl_compat.h"        /* v0.7.15: sdl2-compat's SDL_RenderGetScale */
 #ifdef SFT_H264
 #include <libavcodec/avcodec.h>
 #include <libavutil/hwcontext.h>
@@ -382,7 +386,13 @@ static const char *net_peer_for_menu(void);
 static int conn_for_menu(void);
 static const char *net_status_for_menu(void);
 static const char *ip_edit_for_menu(void);   /* NULL unless an address is being typed */
+#include "lossless.h"          /* v0.7.15: Lossless Scaling (Windows) / lsfg-vk frame generation (Linux) */
 #include "upscale.h"           /* v0.7.11: GPU upscaling, FSR 1 / NIS (U) */
+#ifdef _WIN32
+#define UP_IS_LS (g_upscaler == UP_LS)   /* v0.7.15: Lossless Scaling owns the window's size */
+#else
+#define UP_IS_LS 0
+#endif
 #include "menu.h"              /* v0.5: the main screen while there is no picture */
 #include "hud.h"               /* v0.7.2: the stats overlay (O / F3) */
 #include "picture.h"           /* v0.7.12: brightness, contrast... (P) */
@@ -509,9 +519,10 @@ static void prefs_load(void)
     prefs_path(path, sizeof(path));
     FILE *f = fopen(path, "r");
     if (!f) return;
-    char line[256];
+    char line[640];
     while (fgets(line, sizeof(line), f)) {
         char v[128];
+        ls_prefs_line(line);                   /* v0.7.15: Lossless Scaling (Windows); lsfg= is read by lsfg_env_setup */
         if (sscanf(line, "connection=%127s", v) == 1) g_conn = strcmp(v, "network") == 0 ? CONN_NET : CONN_USB;
         if (sscanf(line, "last_ip=%63s", v) == 1) snprintf(g_last_ip, sizeof(g_last_ip), "%.63s", v);
         int hm;
@@ -600,6 +611,10 @@ static void prefs_save(void)
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
     fprintf(f, "update_betas=%d\nupdate_check=%d\n", g_upd_betas, g_upd_check);
+    ls_prefs_save(f);
+#if LSFG_AVAILABLE
+    lsfg_prefs_save(f);
+#endif
     if (g_geom_valid)
         fprintf(f, "window=%d,%d,%d,%d\nmaximized=%d\n", g_geom_x, g_geom_y, g_geom_w, g_geom_h, g_geom_maximized);
     fclose(f);
@@ -1077,7 +1092,10 @@ static int h264_open(h264_t *d, int low_latency, int threads, int hw)
             const AVCodecHWConfig *cfg = avcodec_get_hw_config(codec, i);
             if (!cfg) break;
             if (cfg->device_type != h264_hw_order[k] || !(cfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)) continue;
-            if (av_hwdevice_ctx_create(&d->hwdev, h264_hw_order[k], NULL, NULL, 0) == 0) {
+            lsfg_va_begin();                /* v0.7.15: VAAPI must not get the OpenGL driver's Zink */
+            const int hw_ok = av_hwdevice_ctx_create(&d->hwdev, h264_hw_order[k], NULL, NULL, 0) == 0;
+            lsfg_va_end();
+            if (hw_ok) {
                 d->hwfmt = cfg->pix_fmt;
                 d->hwname = av_hwdevice_get_type_name(h264_hw_order[k]);
                 d->c->hw_device_ctx = av_buffer_ref(d->hwdev);
@@ -1221,6 +1239,9 @@ static void act_ip(void)                      /* type the Switch's address */
 
 static void act_fullscreen(SDL_Window *win)
 {
+#ifdef _WIN32
+    if (g_upscaler == UP_LS) { ls_toggle(win); viewer_repaint(); return; }   /* v0.7.15: LS is the fullscreen */
+#endif
     const int fs = (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
     if (!fs) {
         /* Remember the windowed box so leaving fullscreen doesn't leave a
@@ -1353,8 +1374,14 @@ static void act_chromeless(SDL_Window *win, int on)
 static void act_upscaler(SDL_Renderer *ren, int mode)   /* -1 = the next one */
 {
     char t[112];
+    const int was = g_upscaler;
     g_upscaler = mode < 0 ? (g_upscaler + 1) % UP_COUNT : mode;
     prefs_save();
+#ifdef _WIN32
+    if ((was == UP_LS) != (g_upscaler == UP_LS)) ls_mode_changed(SDL_RenderGetWindow(ren), g_upscaler == UP_LS);
+#else
+    (void)was;
+#endif
     if (up_needs_swap(ren)) {                 /* the other graphics API: the live loop switches */
         g_ren_swap = 1;
         snprintf(t, sizeof(t), "Upscaling: %s - switching the graphics mode...", up_name[g_upscaler]);
@@ -1380,6 +1407,30 @@ static void act_hwdec(int on)
     prefs_save();
     hud_toast(on ? "Hardware decoding on" : "Hardware decoding off - decoding on the CPU");
 }
+
+#if LSFG_AVAILABLE
+/* v0.7.15: Lossless Scaling frame generation (lsfg-vk); the multiplier, 0 = off */
+static void act_lsfg(int mult)
+{
+    if (mult < 0) mult = lsfg_mult[(lsfg_index(g_lsfg) + 1) % LSFG_N];
+    if (mult == g_lsfg) return;
+    g_lsfg = mult;
+    prefs_save();
+    char t[96];
+    if (g_lsfg == g_lsfg_started) {            /* back to what this process runs with */
+        g_lsfg_restart = 0;
+        snprintf(t, sizeof(t), g_lsfg ? "Frame generation on" : "Frame generation off");
+    } else if (rec_active()) {                 /* a restart would cut the recording short */
+        snprintf(t, sizeof(t), "Frame generation changes when the viewer starts again");
+    } else {
+        g_lsfg_restart = 1;                    /* the live loop restarts the viewer */
+        if (g_lsfg) snprintf(t, sizeof(t), "Frame generation on - restarting the viewer...");
+        else snprintf(t, sizeof(t), "Frame generation off - restarting the viewer...");
+    }
+    hud_toast(t);
+    fprintf(stderr, "\n%s\n", t);
+}
+#endif
 
 #include "ui.h"                /* v0.7.12: the home screen and the settings drawer */
 
@@ -1416,6 +1467,9 @@ static int chromeless_can_drag(SDL_Window *win)
 
 static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
 {
+#if LSFG_AVAILABLE
+    if (g_lsfg_restart) lsfg_restart_now();   /* v0.7.15: asked for on the pass before (its toast drawn) */
+#endif
     g_ui_win = win;
     g_paint_win = win;
     g_paint_ren = ren;
@@ -1547,6 +1601,9 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
         else if (key == SDLK_a) { act_lock_aspect(win, !g_lock_aspect); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_b) { act_chromeless(win, !g_chromeless); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_u) { act_upscaler(ren, -1); if (g_menu) menu_draw(ren); }
+#if LSFG_AVAILABLE
+        else if (key == SDLK_g) { act_lsfg(-1); if (g_menu) menu_draw(ren); }   /* v0.7.15: frame generation */
+#endif
 #ifdef __APPLE__
         else if (key == SDLK_F9) {
             g_fsr_sharpness = g_fsr_sharpness < 40 ? 40 : g_fsr_sharpness < 70 ? 70 : g_fsr_sharpness < 100 ? 100 : 40;
@@ -1857,6 +1914,8 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
 
     while (!g_quit) {
         app_events(win, ren, tex);
+        ls_tick(win, UP_IS_LS, tex && !g_menu);   /* v0.7.15: Lossless Scaling starts with the picture */
+        lsfg_poll(tex && !g_menu);                /* v0.7.15: is lsfg-vk generating? (its log) */
         if (g_ren_swap) {                      /* v0.7.11: the upscaler wants the other renderer */
             ren_swap(&win, &ren, &tex);
             W = H = 0;
@@ -1928,7 +1987,9 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                 W = (uint32_t)show->width; H = (uint32_t)show->height; tex_nv12 = nv12;
                 /* Keep the user's window (and remembered geometry). Only auto-fit
                  * to the stream when nothing was saved and --window was not set. */
-                if (g_win_w > 0) SDL_SetWindowSize(win, g_win_w, g_win_h);
+                ls_set_stream_size(win, (int)W, (int)H, UP_IS_LS);   /* v0.7.15: "Lossless" is 1:1 - LS's window */
+                if (UP_IS_LS) { /* sized by ls_set_stream_size */ }
+                else if (g_win_w > 0) SDL_SetWindowSize(win, g_win_w, g_win_h);
                 else if (!g_geom_valid &&
                          !(SDL_GetWindowFlags(win) & (SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_MAXIMIZED)))
                     size_video_window(win, (int)W, (int)H);
@@ -2107,6 +2168,7 @@ int main(int argc, char **argv)
             for (int k = 0; k < HUD_MODES; k++) if (!strcmp(m, hud_mode_name[k]) || (k == HUD_FPS && !strcmp(m, "fps"))) g_hud = k;
         }
         else if (!strcmp(argv[i], "--upscaler") && i + 1 < argc) up_set_by_key(argv[++i]);
+        else if (!strcmp(argv[i], "--lsfg") && i + 1 < argc) ++i;   /* v0.7.15: read by lsfg_env_setup (Linux) */
         else if (!strcmp(argv[i], "--software")) g_hwdec = 0;
         else if (!strcmp(argv[i], "--picture") && i + 1 < argc) pic_parse(argv[++i]);   /* v0.7.12: B,C,S,G,SH as in viewer.ini (tests) */
         else if (!strcmp(argv[i], "--hwdec")) g_hwdec = 1;
@@ -2142,6 +2204,8 @@ int main(int argc, char **argv)
         }
     }
 #endif
+    /* v0.7.15: frame generation (lsfg-vk) picks the OpenGL driver - before SDL loads it */
+    if (!headless) lsfg_env_setup(argv);
     /* Ctrl-C before the first frame still ends with the summary below */
     signal(SIGINT, on_sigint);
 

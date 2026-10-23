@@ -226,7 +226,8 @@ static void hud_draw(SDL_Renderer *ren, int W, int H, const char *conn, const ch
     char t[256];
     const SDL_Color fc = hud_fps_colour();
     if (g_hud == HUD_FPS) {
-        snprintf(t, sizeof(t), "%.0f fps", g_hs.have ? g_hs.fps : 0.0);
+        const char *fg = lsfg_fps_tag();          /* v0.7.15: is frame generation on top? */
+        snprintf(t, sizeof(t), "%.0f fps%s%s", g_hs.have ? g_hs.fps : 0.0, fg ? "  " : "", fg ? fg : "");
         ui_rrect(ren, 10, 10, text_width(t, 26, 1) + 24, 40, 10, hud_panel);
         hud_text(ren, t, 18, 12, 26, 1, fc, 0);
     } else if (g_hud == HUD_GRAPHS) {
@@ -240,7 +241,7 @@ static void hud_draw(SDL_Renderer *ren, int W, int H, const char *conn, const ch
     } else if (g_hud == HUD_FULL) {
         /* numbers on the left, graphs on the right */
         const int lx = 10, ly = 10, lw = 340;
-        ui_rrect(ren, lx, ly, lw, 492, 10, hud_panel);
+        ui_rrect(ren, lx, ly, lw, 492 + 22 * LSFG_AVAILABLE, 10, hud_panel);   /* v0.7.15: + the frame generation row */
         int y = ly + 10;
         #define HUD_ROW(name, ...) do { text_draw(ren, name, lx + 12, y, 16, 0, hud_dim, 0); \
             snprintf(t, sizeof(t), __VA_ARGS__); text_draw(ren, t, lx + lw - 12, y, 16, 1, hud_ink, 2); y += 22; } while (0)
@@ -258,6 +259,9 @@ static void hud_draw(SDL_Renderer *ren, int W, int H, const char *conn, const ch
         HUD_ROW("  decoder", "%s", g_dec_mode);
         HUD_ROW(g_vsync ? "Draw + vsync" : "Draw (vsync off)", "%.1f ms", g_hs.draw_ms);
         { char ut[64]; up_hud_text(ut, sizeof(ut)); HUD_ROW("Upscaling", "%s", ut); }
+#if LSFG_AVAILABLE
+        { char ft[64]; lsfg_hud_text(ft, sizeof(ft)); HUD_ROW("Frame generation", "%s", ft); }
+#endif
         HUD_ROW("Worst frame gap", "%.1f ms", g_hs.gap_max);
         HUD_ROW("Frames skipped", "%ld (this second)", g_hs.skipped);
         HUD_ROW("Packets lost", "%ld", g_hs.lost);

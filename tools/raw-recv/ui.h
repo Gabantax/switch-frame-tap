@@ -50,13 +50,13 @@ static void ui_open(int open);
 
 enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
        H_PIC, H_PIC_RESET, H_SOUND, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
-       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO };
+       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_LSFG };
 
 typedef struct { SDL_FRect r; int id, arg, window_space; } ui_hit_t;
 static ui_hit_t g_ui_hits[96];
 static int g_ui_nhits;
 /* the drawer's rows in order, for the keys: (id, arg) */
-static struct { int id, arg; float y, h; } g_ui_rows[24];
+static struct { int id, arg; float y, h; } g_ui_rows[32];
 static int g_ui_nrows;
 
 static void ui_hit(float x, float y, float w, float h, int id, int arg)
@@ -563,9 +563,11 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
 #ifdef _WIN32
             else if (g_upscaler == UP_RTX)
                 snprintf(why, sizeof(why), "NVIDIA RTX Video Super Resolution (U)");
+            else if (g_upscaler == UP_LS)
+                snprintf(why, sizeof(why), "Lossless Scaling app, on this PC (U)");
 #endif
             else
-                snprintf(why, sizeof(why), "%s (U)", up_name[g_upscaler]);
+                snprintf(why, sizeof(why), "%s (U)", up_name[g_upscaler % UP_COUNT]);
             /* When live, prefer the real status (GPU / output size / restart note). */
             if (g_upscaler != UP_OFF) {
                 char live[120];
@@ -577,9 +579,22 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             if (ui_focused(H_UPS, 0)) ui_rrect(ren, cxi - ui_d(12), y - 2, cwi + ui_d(24), h_ups + 4, ui_d(10), UI_SURF2);
             text_draw(ren, "Upscaling", (int)cxi, (int)(y + ui_d(2)), ui_px(17), 0, UI_INK, 0);
             ui_text_fit(ren, why, (int)cxi, (int)(y + ui_d(24)), ui_px(13), 0, UI_DIM, 0, (int)cwi);
-            static const char *const ups[] = { "Off", "FSR 1", "NIS", "RTX VSR" };
+            static const char *const ups[] = { "Off", "FSR 1", "NIS", "RTX VSR", "Lossless" };
             ui_seg(ren, xri, 0, y + ui_d(48), ups, UP_COUNT, g_upscaler, H_UPS, 13, cwi);
             y += h_ups + gap_y;
+#if LSFG_AVAILABLE
+            {   /* v0.7.15: Lossless Scaling frame generation through lsfg-vk */
+                char fg[120];
+                lsfg_describe(fg, sizeof(fg));
+                static const char *const fgs[] = { "Off", "On" };
+                ui_row(H_LSFG, 0, y, h_ups);
+                if (ui_focused(H_LSFG, 0)) ui_rrect(ren, cxi - ui_d(12), y - 2, cwi + ui_d(24), h_ups + 4, ui_d(10), UI_SURF2);
+                text_draw(ren, "Frame generation", (int)cxi, (int)(y + ui_d(2)), ui_px(17), 0, UI_INK, 0);
+                ui_text_fit(ren, fg, (int)cxi, (int)(y + ui_d(24)), ui_px(13), 0, UI_DIM, 0, (int)cwi);
+                ui_seg(ren, xri, 0, y + ui_d(48), fgs, LSFG_N, lsfg_index(g_lsfg), H_LSFG, 13, cwi);
+                y += h_ups + gap_y;
+            }
+#endif
 #ifdef __APPLE__
             if (g_upscaler == UP_FSR) {
                 const float sh = ui_d(52), ty = y + ui_d(34);
@@ -1176,6 +1191,9 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
     case H_HWDEC: act_hwdec(!g_hwdec); break;
     case H_UPS: act_upscaler(ren, d < 0 ? (g_upscaler + UP_COUNT - 1) % UP_COUNT : (g_upscaler + 1) % UP_COUNT); break;
     case H_HUD: act_hud(d < 0 ? (g_hud + HUD_MODES - 1) % HUD_MODES : (g_hud + 1) % HUD_MODES); break;
+#if LSFG_AVAILABLE
+    case H_LSFG: act_lsfg(lsfg_mult[(lsfg_index(g_lsfg) + (d < 0 ? LSFG_N - 1 : 1)) % LSFG_N]); break;
+#endif
     case H_FSR_SHARP:
         g_fsr_sharpness = d == 0 ? 70 : SDL_clamp(g_fsr_sharpness + d * 5, 0, 100);
         prefs_save();
@@ -1284,6 +1302,9 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_HWDEC: act_hwdec(h->arg); break;
             case H_UPS: act_upscaler(ren, h->arg); break;
             case H_HUD: act_hud(h->arg); break;
+#if LSFG_AVAILABLE
+            case H_LSFG: act_lsfg(lsfg_mult[h->arg]); break;
+#endif
             case H_PIC: g_ui_drag = H_PIC; g_ui_drag_arg = h->arg; ui_slide(g_ui_mx); prefs_save(); break;
             case H_FSR_SHARP: g_ui_drag = H_FSR_SHARP; g_ui_drag_arg = 0; ui_slide(g_ui_mx); prefs_save(); break;
             case H_PIC_RESET: g_pic = pic_default; prefs_save(); break;

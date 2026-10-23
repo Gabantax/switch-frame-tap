@@ -13,6 +13,11 @@ finish-args:
   - --device=usb
   - --filesystem=xdg-videos
   - --share=network
+  # v0.7.15: lsfg-vk (Frame generation, G) reads Lossless Scaling's shaders from Steam
+  - --filesystem=~/.local/share/Steam/steamapps/common/Lossless Scaling:ro
+  - --filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/Lossless Scaling:ro
+  # lsfg-vk-ui's settings (the viewer adds its profile there once)
+  - --filesystem=~/.config/lsfg-vk:create
 modules:
   - name: nv-codec-headers
     buildsystem: simple

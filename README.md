@@ -37,7 +37,9 @@ the viewer on your PC, start a game.
 - **Webcam mode**: the Switch shows up as a USB camera in OBS, Discord, Zoom
   or any camera app.
 - **Optional GPU upscaling** in the viewer (AMD FSR 1, NVIDIA NIS, RTX Video
-  Super Resolution on Windows).
+  Super Resolution on Windows), and **Lossless Scaling** on the PC: its
+  upscalers and frame generation on Windows, its frame generation (LSFG,
+  through lsfg-vk) on Linux.
 - **Screen off while streaming**, to save battery when you play on the PC.
 - **A Switch app and an overlay** for every setting, so you never have to edit
   files.
@@ -320,13 +322,14 @@ default audio device.
 |---|---|
 | **R** | record / stop recording (below) |
 | **M** | mute / unmute the game's sound |
-| **F11** or a double-click | fullscreen |
+| **F11** or a double-click | fullscreen (with Upscaling on *Lossless*: Lossless Scaling's scaling on / off) |
 | **Esc** | Settings (v0.7.12): every option in one place - connection, display, upscaling, decoding, picture, sound, recording - with the mouse or the arrow keys |
 | **Tab** | the connection: USB / Network (v0.7.0; remembered) |
 | **I** | type the Switch's IP address (Network, if it is not found by itself) |
 | **O** or **F3** | the stats overlay: off / FPS / graphs / full (v0.7.2; remembered) |
 | **V** | vsync on / off - off is lower latency but may tear (v0.7.11; remembered) |
-| **U** | GPU upscaling: off / AMD FSR 1 / NVIDIA NIS, plus NVIDIA RTX Video Super Resolution on Windows (v0.7.11; remembered, off by default) |
+| **U** | GPU upscaling: off / AMD FSR 1 / NVIDIA NIS, plus NVIDIA RTX Video Super Resolution and Lossless Scaling on Windows (v0.7.11; remembered, off by default) |
+| **G** | Linux: Lossless Scaling frame generation through lsfg-vk on / off, set up in lsfg-vk-ui (v0.7.15; remembered; restarts the viewer) |
 | **P** | Settings at the picture controls: brightness, contrast, saturation, gamma, sharpness (v0.7.12; remembered) |
 
 It reads USB, decodes and draws on separate threads and shows the frames in
@@ -354,6 +357,57 @@ on Metal (since v0.7.13, DiM3NT0R's PR #14); on Windows, **RTX VSR**
 uses an RTX card's own AI upscaler (turn on *RTX Video Enhancement - Super
 resolution* in the NVIDIA app or Control Panel; it costs a few milliseconds
 of latency). Recordings and screenshots keep the console's own picture.
+
+**Lossless Scaling** (v0.7.15, off by default): the
+[Lossless Scaling](https://store.steampowered.com/app/993090/Lossless_Scaling/)
+app (Steam, paid) upscales and adds generated frames on the PC. The
+Switch keeps sending its own 720p / 1080p picture; nothing changes on the
+console.
+
+- **Windows**: set **Upscaling** to **Lossless** (U or Settings). The viewer
+  then draws the stream 1:1 in a window of exactly the stream's size (1280x720
+  or 1920x1080) and leaves fullscreen, because Lossless Scaling scales a
+  window's pixels: anything bigger would be scaled twice. It starts Lossless
+  Scaling if it is not running (found through Steam) and, once the picture is
+  up, presses Lossless Scaling's **Scale** hotkey for you. **F11** then turns
+  the scaling off and on. Pick the upscaler (LS1, FSR, NIS, SGSR, ...) and
+  frame generation (LSFG) in Lossless Scaling itself. Set its *Scaling mode*
+  to *Auto* / fullscreen. In `viewer.ini`, `ls_hotkey=ctrl+alt+s` must
+  match the hotkey set in Lossless Scaling (that is its default),
+  `ls_auto=0` stops the viewer from starting it and pressing the hotkey, and
+  `ls_path=` names `LosslessScaling.exe` if Steam does not know it.
+- **Linux**: Lossless Scaling itself does not run on Linux, but its frame
+  generation does, through [lsfg-vk](https://lsfg-vk.dev). Upscaling stays the
+  viewer's own FSR 1 / NIS on your graphics card (U). **Frame generation**
+  (G or Settings: off / on) adds LSFG frames on top, and you set it up
+  entirely in lsfg-vk (`lsfg-vk-ui`), as for any game. You need:
+  1. Lossless Scaling in Steam. With lsfg-vk 2.x, switch it to the
+     **lsfg-vk** beta branch (Steam > Lossless Scaling > Properties > Betas),
+     which installs the `lsfg-vk.dll` that lsfg-vk 2 reads.
+  2. lsfg-vk installed (the package, or the Flatpak
+     `org.freedesktop.Platform.VulkanLayer.lsfgvk` for the Flatpak viewer).
+  3. Mesa's Zink driver (part of Mesa). lsfg-vk is a Vulkan layer and the
+     viewer draws with OpenGL, so with frame generation on, the viewer starts
+     its OpenGL on Zink (OpenGL on Vulkan). That is all the switch does. The
+     driver is chosen when the program starts, so changing it restarts the
+     viewer.
+
+  lsfg-vk finds programs by name (a profile's `active_in`). The first time,
+  the viewer adds a profile **Switch Frame Tap** for `raw-view` and
+  `switch-frame-tap-viewer` to lsfg-vk's `conf.toml`. Its multiplier, flow
+  scale, performance mode and pacing are changed in lsfg-vk-ui, while the
+  viewer runs too. If any of the three is missing, the viewer starts the
+  usual way (a broken lsfg-vk would otherwise leave the window black), and
+  Settings and the stats overlay say what is missing. The viewer also reads
+  lsfg-vk's messages: if lsfg-vk reports an error, the viewer restarts
+  without it and says why, and if no profile matches, it says that too. The
+  FPS counter (O) shows **+ LSFG 2x** once frames are being generated. The
+  number is the stream's own frame rate; the generated frames come on top.
+  `lsfg-vk-cli benchmark` checks lsfg-vk on its own: it must not say
+  *Unable to find lsfg-vk.dll*.
+
+Frame generation adds latency (a frame or so) and looks best at a steady
+60 fps; keep **Vsync** on.
 
 **The stats overlay** (v0.7.2): **O** or **F3** steps through four levels -
 off; **FPS**, a counter in the corner (yellow or red when frames come

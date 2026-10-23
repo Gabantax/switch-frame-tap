@@ -17,10 +17,11 @@
 #include "upscale_shaders.h"
 #include "clarity.h"
 
-#ifdef _WIN32   /* + NVIDIA RTX Video Super Resolution, a Windows driver feature (Direct3D 11) */
-enum { UP_OFF = 0, UP_FSR, UP_NIS, UP_RTX, UP_COUNT };
-static const char *const up_name[UP_COUNT] = { "off", "FSR 1", "NIS", "RTX VSR" };
-static const char *const up_key[UP_COUNT] = { "off", "fsr", "nis", "rtx" };
+#ifdef _WIN32   /* + NVIDIA RTX Video Super Resolution, a Windows driver feature (Direct3D 11);
+                 * v0.7.15: + Lossless Scaling, the Steam app, scaling the window (lossless.h) */
+enum { UP_OFF = 0, UP_FSR, UP_NIS, UP_RTX, UP_LS, UP_COUNT };
+static const char *const up_name[UP_COUNT] = { "off", "FSR 1", "NIS", "RTX VSR", "Lossless Scaling" };
+static const char *const up_key[UP_COUNT] = { "off", "fsr", "nis", "rtx", "lossless" };
 #elif defined(__APPLE__)
 enum { UP_OFF = 0, UP_FSR, UP_COUNT, UP_NIS = UP_COUNT };
 static const char *const up_name[UP_COUNT] = { "off", "FSR 1" };
@@ -702,6 +703,9 @@ static int up_draw(SDL_Renderer *ren, uint8_t *const data[3], const int linesize
 #else
 #ifdef _WIN32
     if (mode == UP_RTX) return vsr_draw(ren, data, linesize, W, H, nv12);
+    if (mode == UP_LS) { g_up_why[0] = 0; return 0; }   /* 1:1; Lossless Scaling scales the window */
+#else
+    lsfg_probe_gl();                              /* v0.7.15: is OpenGL on Zink (lsfg-vk)? */
 #endif
     if (mode == UP_OFF) { g_up_why[0] = 0; return 0; }
     if (!up_init(ren)) return up_skip("unavailable, press U", 0);
@@ -830,6 +834,7 @@ static void up_describe(SDL_Renderer *ren, char *out, size_t cap)
         }
         return;
     }
+    if (g_upscaler == UP_LS) { ls_describe(out, cap); return; }
 #endif
     if (!up_init(ren)) {
         SDL_RendererInfo ri;
@@ -849,6 +854,9 @@ static void up_describe(SDL_Renderer *ren, char *out, size_t cap)
 /* the overlay's line */
 static void up_hud_text(char *out, size_t cap)
 {
+#ifdef _WIN32
+    if (g_upscaler == UP_LS) { snprintf(out, cap, "Lossless Scaling %s", g_ls.on ? "(on)" : "(waiting)"); return; }
+#endif
     if (!g_up.active) { snprintf(out, cap, "%s", g_upscaler == UP_OFF ? "off (U)" : g_up_why[0] ? g_up_why : "-"); return; }
 #ifdef _WIN32
     if (g_upscaler == UP_RTX && g_vsr.vsr < 0) { snprintf(out, cap, "plain, to %dx%d (no RTX VSR)", g_up.out_w, g_up.out_h); return; }

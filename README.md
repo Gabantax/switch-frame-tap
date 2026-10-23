@@ -16,8 +16,8 @@ the viewer on your PC, start a game.
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/4Y5pTQaAOyo"><img src="https://img.youtube.com/vi/4Y5pTQaAOyo/maxresdefault.jpg" width="60%" alt="Demo video: a Switch plugged into a laptop, the same game on a TV, a Mario Kart race recorded at 1080p 60 fps"></a><br>
-  <sub><a href="https://youtu.be/4Y5pTQaAOyo">Watch the 40-second demo</a></sub>
+  <a href="https://youtu.be/AsY-5KIC_1s"><img src="https://img.youtube.com/vi/AsY-5KIC_1s/maxresdefault.jpg" width="60%" alt="Demo video: the Switch in front of a PC monitor, both showing the HOME menu with the Ultrahand overlay open"></a><br>
+  <sub><a href="https://youtu.be/AsY-5KIC_1s">Watch the demo (1:43)</a>: connecting, the HOME menu and overlays, 1080p60, the Switch Lite, a 480 fps latency test</sub>
 </p>
 
 ## Features

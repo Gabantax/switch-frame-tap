@@ -45,6 +45,15 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.14" date="2026-10-22">
+      <description>
+        <ul>
+          <li>Stream the Switch's HOME menu and its overlays (volume bar, quick settings, power menu, Tesla/Ultrahand) - opt-in on the console.</li>
+          <li>Network streams show a picture right away when the viewer joins mid-game.</li>
+          <li>The viewer explains USB-C to USB-C cable trouble, and draws in software when no GPU driver works.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.13.1" date="2026-10-18">
       <description>
         <ul>

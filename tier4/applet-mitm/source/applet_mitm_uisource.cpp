@@ -1,4 +1,5 @@
 #include "applet_mitm_uisource.hpp"
+#include "applet_mitm_featmem.hpp"
 #include <cstdio>
 #include <cstring>
 #include "applet_mitm_log.hpp"
@@ -62,12 +63,17 @@ namespace ams::mitm::applet {
 
         constinit ::ams::svc::Handle g_dbg = ::ams::svc::InvalidHandle;
         constinit u64 g_base = 0;
-        constinit Region g_regs[MaxRegs] = {};
+        /* the scan's buffers (20 KB): taken at the first HOME-menu session,
+         * not static - they cost everyone (applet_mitm_featmem.hpp) */
+        struct Work {
+            Region regs[MaxRegs];
+            Msg msgs[MaxMsgs];
+            alignas(0x10) u8 chunk[Chunk + 0x60];
+        };
+        constinit Work *g_work = nullptr;
         constinit u32 g_nregs = 0;
-        constinit Msg g_msgs[MaxMsgs] = {};
         constinit u32 g_nmsgs = 0;
         constinit s32 g_active = -1;
-        alignas(0x10) constinit u8 g_chunk[Chunk + 0x60] = {};
 
         constinit u32 g_fed = 0, g_switches = 0, g_rescans = 0, g_shaped = 0;
         /* test2: per 5 s window, the layer fed and the slots its frames named */
@@ -93,7 +99,7 @@ namespace ams::mitm::applet {
                 const bool data = type == 0x04 || type == 0x05 || type == 0x09;
                 const bool rw = (static_cast<u32>(mi.permission) & 2) != 0;
                 if (data && rw && mi.base_address != g_base && mi.size <= 16 * 1024 * 1024 && total + mi.size <= 16 * 1024 * 1024) {
-                    g_regs[g_nregs++] = { mi.base_address, mi.size };
+                    g_work->regs[g_nregs++] = { mi.base_address, mi.size };
                     total += mi.size;
                 }
                 const u64 next = mi.base_address + mi.size;
@@ -105,26 +111,26 @@ namespace ams::mitm::applet {
         /* every present-shaped message in vi's data */
         void Scan() {
             ++g_rescans;
-            const u64 keep = g_active >= 0 ? g_msgs[g_active].va : 0;   /* the followed one stays followed */
+            const u64 keep = g_active >= 0 ? g_work->msgs[g_active].va : 0;   /* the followed one stays followed */
             g_nmsgs = 0;
             g_active = -1;
             g_shaped = 0;
             for (u32 r = 0; r < g_nregs; ++r) {
                 /* each chunk read with the 0x58 bytes before it, so a message on a boundary is whole */
-                for (u64 off = 0; off < g_regs[r].size; off += Chunk) {
+                for (u64 off = 0; off < g_work->regs[r].size; off += Chunk) {
                     const u64 lead = off >= 0x58 ? 0x58 : off;
-                    const size_t len = static_cast<size_t>(std::min<u64>(Chunk, g_regs[r].size - off) + lead);
-                    if (!DbgRead(g_dbg, g_chunk, g_regs[r].addr + off - lead, len)) { continue; }
+                    const size_t len = static_cast<size_t>(std::min<u64>(Chunk, g_work->regs[r].size - off) + lead);
+                    if (!DbgRead(g_dbg, g_work->chunk, g_work->regs[r].addr + off - lead, len)) { continue; }
                     for (size_t i = 0x58; i + 8 <= len; i += 4) {
                         if (i < lead) { continue; }
                         Msg m;
-                        if (!ParseAt(g_chunk + i, std::addressof(m))) { continue; }
+                        if (!ParseAt(g_work->chunk + i, std::addressof(m))) { continue; }
                         ++g_shaped;
                         if (g_nmsgs < MaxMsgs) {
-                            m.va = g_regs[r].addr + off - lead + i;
+                            m.va = g_work->regs[r].addr + off - lead + i;
                             m.changed_ns = 0;
                             if (m.va == keep) { g_active = static_cast<s32>(g_nmsgs); }
-                            g_msgs[g_nmsgs++] = m;
+                            g_work->msgs[g_nmsgs++] = m;
                         }
                     }
                 }
@@ -133,7 +139,7 @@ namespace ams::mitm::applet {
 
         bool ReadMsg(u32 k, Msg *out) {
             u8 buf[0x60];
-            if (!DbgRead(g_dbg, buf, g_msgs[k].va - 0x58, sizeof(buf))) { return false; }
+            if (!DbgRead(g_dbg, buf, g_work->msgs[k].va - 0x58, sizeof(buf))) { return false; }
             return ParseAt(buf + 0x58, out);
         }
 
@@ -156,10 +162,10 @@ namespace ams::mitm::applet {
                 const u64 now = NowNs();
                 if (g_active >= 0) {
                     Msg m;
-                    if (ReadMsg(static_cast<u32>(g_active), std::addressof(m)) && m.fence_value != g_msgs[g_active].fence_value) {
-                        m.va = g_msgs[g_active].va;
+                    if (ReadMsg(static_cast<u32>(g_active), std::addressof(m)) && m.fence_value != g_work->msgs[g_active].fence_value) {
+                        m.va = g_work->msgs[g_active].va;
                         m.changed_ns = now;
-                        g_msgs[g_active] = m;
+                        g_work->msgs[g_active] = m;
                         last_any = now;
                         Feed(m);
                     }
@@ -169,13 +175,13 @@ namespace ams::mitm::applet {
                     for (u32 k = 0; k < g_nmsgs; ++k) {
                         if (static_cast<s32>(k) == g_active) { continue; }
                         Msg m;
-                        if (!ReadMsg(k, std::addressof(m)) || m.fence_value == g_msgs[k].fence_value) { continue; }
-                        m.va = g_msgs[k].va;
+                        if (!ReadMsg(k, std::addressof(m)) || m.fence_value == g_work->msgs[k].fence_value) { continue; }
+                        m.va = g_work->msgs[k].va;
                         m.changed_ns = now;
-                        g_msgs[k] = m;
+                        g_work->msgs[k] = m;
                         last_any = now;
                         /* follow it if the followed one has gone quiet (another layer in front) */
-                        if (g_active < 0 || now - g_msgs[g_active].changed_ns > UINT64_C(60000000)) {
+                        if (g_active < 0 || now - g_work->msgs[g_active].changed_ns > UINT64_C(60000000)) {
                             if (g_switches++ < 64) {
                                 LogLine("   ui: following layer %#llx (syncpoint %u, slot %d) at %#llx", static_cast<unsigned long long>(m.layer), m.fence_id,
                                         m.slot, static_cast<unsigned long long>(m.va));
@@ -245,6 +251,12 @@ namespace ams::mitm::applet {
 
     bool UiSourceStart(::ams::svc::Handle dbg, u64 pid, u64 base) {
         AMS_UNUSED(pid);
+        if (g_work == nullptr) {
+            static_assert(alignof(Work) <= os::MemoryPageSize);
+            void *mem = FeatureMemory(sizeof(Work), "home menu: the present scan");
+            if (mem == nullptr) { return false; }
+            g_work = static_cast<Work *>(mem);
+        }
         g_dbg = dbg;
         g_base = base;
         g_fed = g_switches = g_rescans = 0;
@@ -255,10 +267,10 @@ namespace ams::mitm::applet {
         os::SleepThread(TimeSpan::FromMilliSeconds(60));
         for (u32 k = 0; k < g_nmsgs; ++k) {
             Msg m;
-            if (ReadMsg(k, std::addressof(m)) && m.fence_value != g_msgs[k].fence_value) {
-                m.va = g_msgs[k].va;
+            if (ReadMsg(k, std::addressof(m)) && m.fence_value != g_work->msgs[k].fence_value) {
+                m.va = g_work->msgs[k].va;
                 m.changed_ns = NowNs();
-                g_msgs[k] = m;
+                g_work->msgs[k] = m;
                 if (g_active < 0) { g_active = static_cast<s32>(k); }
             }
         }
@@ -266,9 +278,9 @@ namespace ams::mitm::applet {
                 static_cast<unsigned long long>(base), g_nregs, g_nmsgs, g_shaped, static_cast<unsigned long long>((NowNs() - t0) / 1000000),
                 g_active >= 0 ? "one is live" : "none live yet");
         if (g_active >= 0) {
-            LogLine("   ui: following layer %#llx (syncpoint %u) at %#llx", static_cast<unsigned long long>(g_msgs[g_active].layer), g_msgs[g_active].fence_id,
-                    static_cast<unsigned long long>(g_msgs[g_active].va));
-            Feed(g_msgs[g_active]);
+            LogLine("   ui: following layer %#llx (syncpoint %u) at %#llx", static_cast<unsigned long long>(g_work->msgs[g_active].layer), g_work->msgs[g_active].fence_id,
+                    static_cast<unsigned long long>(g_work->msgs[g_active].va));
+            Feed(g_work->msgs[g_active]);
         }
         g_feed_stop.store(false, std::memory_order_relaxed);
         if (R_FAILED(os::CreateThread(std::addressof(g_feed_thread), FeedThread, nullptr, g_feed_stack, sizeof(g_feed_stack), os::GetThreadPriority(os::GetCurrentThread())))) {

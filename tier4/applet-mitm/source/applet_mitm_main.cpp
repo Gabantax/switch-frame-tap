@@ -33,6 +33,7 @@
 #include "applet_mitm_soundprobe.hpp"
 #include "applet_mitm_ovlprobe.hpp"
 #include "applet_mitm_overlay.hpp"
+#include "applet_mitm_featmem.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -129,10 +130,22 @@ namespace ams {
             private:
                 virtual Result OnNeedsToAccept(int port_index, Server *server) override;
         };
-        UiServerManager g_ui_server_manager;
+        /* v0.7.14: made only with home_menu on (or the probe), in memory
+         * taken then (52 KB, most of it the sessions' pointer buffers -
+         * static, it cost everyone; applet_mitm_featmem.hpp) */
+        constinit UiServerManager *g_ui_server_manager = nullptr;
+        UiServerManager *UiServer() {
+            static_assert(alignof(UiServerManager) <= os::MemoryPageSize);
+            if (g_ui_server_manager == nullptr) {
+                if (void *mem = mitm::applet::FeatureMemory(sizeof(UiServerManager), "home menu: the dispdrv server"); mem != nullptr) {
+                    g_ui_server_manager = std::construct_at(static_cast<UiServerManager *>(mem));
+                }
+            }
+            return g_ui_server_manager;
+        }
         alignas(os::ThreadStackAlignment) constinit u8 g_ui_stacks[UiThreads][12_KB];
         constinit os::ThreadType g_ui_threads[UiThreads];
-        void UiLoopThread(void *) { mitm::applet::LoopProcessSafely(g_ui_server_manager, "dispdrv"); }
+        void UiLoopThread(void *) { mitm::applet::LoopProcessSafely(*g_ui_server_manager, "dispdrv"); }
 
         /* our own dispdrv session first (taken before the mitm exists, so it
          * is the real service), and its pointer buffer: a mitm session's
@@ -160,9 +173,11 @@ namespace ams {
                 mitm::applet::LogLine("uiprobe: dispdrv mitm off (nodispdrv)");
             } else if (dd.pointer_buffer_size > UiServerOptions::PointerBufferSize) {
                 mitm::applet::LogLine("home menu: dispdrv's pointer buffer is larger than ours - the Album is not streamed");
+            } else if (UiServer() == nullptr) {
+                mitm::applet::LogLine("home menu: the Album is not streamed (no memory for its server)");
             } else {
                 mitm::applet::g_ui_dispdrv_probe.store(probe_dd);
-                SFT_ABORT_UNLESS(g_ui_server_manager.RegisterMitmServer<mitm::applet::UiBinderMitm>(UiPortIndex_Dispdrv, DispdrvServiceName));
+                SFT_ABORT_UNLESS(UiServer()->RegisterMitmServer<mitm::applet::UiBinderMitm>(UiPortIndex_Dispdrv, DispdrvServiceName));
                 mitm::applet::LogLine("dispdrv wrapped for %s", probe_dd ? "the probe (HOME-menu processes) and the Album" : "the Album (home_menu)");
                 any = true;
             }
@@ -181,9 +196,9 @@ namespace ams {
                     const u32 pbs = static_cast<u32>(vs.pointer_buffer_size);
                     ::serviceClose(std::addressof(vs));
                     mitm::applet::LogLine("uiprobe: vi:s pointer buffer %#x (ours %#zx, vi server %#zx)", pbs, UiServerOptions::PointerBufferSize, ServerOptions::PointerBufferSize);
-                    if (pbs <= UiServerOptions::PointerBufferSize && pbs <= ServerOptions::PointerBufferSize) {
+                    if (pbs <= UiServerOptions::PointerBufferSize && pbs <= ServerOptions::PointerBufferSize && UiServer() != nullptr) {
                         mitm::applet::g_ui_vi_mitm.store(true);
-                        SFT_ABORT_UNLESS(g_ui_server_manager.RegisterMitmServer<mitm::applet::ViSystemRootMitm>(UiPortIndex_ViSystem, ViSystemServiceName));
+                        SFT_ABORT_UNLESS(UiServer()->RegisterMitmServer<mitm::applet::ViSystemRootMitm>(UiPortIndex_ViSystem, ViSystemServiceName));
                         mitm::applet::LogLine("uiprobe: library applets' vi:s and vi:m wrapped (shared-layer presents logged)");
                         any = true;
                     } else {
@@ -1111,7 +1126,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14-ovl9: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.14-pre1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

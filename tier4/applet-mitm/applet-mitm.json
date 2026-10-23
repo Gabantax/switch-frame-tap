@@ -87,6 +87,7 @@
                 "svcSignalEvent": "0x11",
                 "svcClearEvent": "0x12",
                 "svcMapSharedMemory": "0x13",
+                "svcCreateSharedMemory": "0x50",
                 "svcUnmapSharedMemory": "0x14",
                 "svcCreateTransferMemory": "0x15",
                 "svcCloseHandle": "0x16",

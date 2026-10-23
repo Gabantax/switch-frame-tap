@@ -1880,6 +1880,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_queue_transform{0};
     constinit std::atomic<u32> g_queue_crop_wh{0};
     constinit std::atomic<bool> g_queue_crop_origin0{true};
+    constinit std::atomic<u32> g_queue_crop_c{0};
     constinit std::atomic<bool> g_viewer_key_request{false};
     constinit std::atomic<bool> g_viewer_can_ask{false};
     constinit std::atomic<u64> g_queue_fence[4] = {};
@@ -3319,6 +3320,55 @@ namespace ams::mitm::applet {
             return true;
         }
 
+        /* v0.7.16: a game rebuilding its graphics (Kingdom Hearts II's
+         * native build, switched docked/handheld from an overlay: four new
+         * buffer sets in 30 s, then it was gone and the screen black) is not
+         * attached to again in the middle of it - every attach stops the game
+         * for a moment, and while it rebuilds it starts and ends threads, each
+         * one an event it waits on us for (33 in one session, up to 7.8 ms).
+         * Wait until its buffers stay the same and it presents again: 1 s,
+         * or 3 s when it rebuilt three times within 20 s; at most 8 s. */
+        void SettleAfterRebuild() {
+            static constinit u64 s_rebuild_ns[3] = {};
+            static constinit u32 s_rebuild_i = 0;
+            const u64 now = armTicksToNs(armGetSystemTick());
+            s_rebuild_ns[s_rebuild_i++ % 3] = now;
+            const u64 oldest = s_rebuild_ns[s_rebuild_i % 3];
+            const bool churning = s_rebuild_i >= 3 && now - oldest < UINT64_C(20000000000);
+            const u64 quiet_ns = churning ? UINT64_C(3000000000) : UINT64_C(1000000000);
+            const u64 pid = g_app_pid.load(std::memory_order_relaxed);
+            u32 gen = g_game_surface.generation;
+            u64 t_gen = now;
+            for (;;) {
+                os::SleepThread(TimeSpan::FromMilliSeconds(100));
+                const u64 t = armTicksToNs(armGetSystemTick());
+                if (g_app_pid.load(std::memory_order_relaxed) != pid) { return; }   /* the game went away */
+                if (g_game_surface.generation != gen) { gen = g_game_surface.generation; t_gen = t; }
+                const u64 last_present = armTicksToNs(g_app_present_tick.load(std::memory_order_relaxed));
+                const bool presenting = last_present != 0 && t > last_present && t - last_present < UINT64_C(200000000);
+                if (presenting && t - t_gen >= quiet_ns) { break; }
+                if (t - now >= UINT64_C(8000000000)) { break; }
+            }
+            const u64 waited = armTicksToNs(armGetSystemTick()) - now;
+            if (churning || waited > UINT64_C(1500000000)) {
+                LogLine("   live: the game %s its frame buffers - waited %llu ms for it to settle before attaching again",
+                        churning ? "keeps rebuilding" : "rebuilt", static_cast<unsigned long long>(waited / 1000000));
+            }
+        }
+
+        /* v0.7.16: the game has drawn nothing for 5 s. A session still ends
+         * after 1 s without a present (detach-on-home), but the engines and
+         * the donor's memory stay for this long: a loading screen (Doom 3,
+         * Duke Nukem) is back within that, and the stream with it at once -
+         * the 1 s rule gave the memory back and held the setup 5 s, ~7 s
+         * without picture on every load. The HOME menu gets it after 5 s; an
+         * applet that needs it sooner (a manual, the eShop, a full pool) is
+         * caught when it starts, as before. */
+        static bool LongNotPresenting() {
+            const u64 lp = g_app_present_tick.load(std::memory_order_relaxed);
+            return lp == 0 || armTicksToNs(armGetSystemTick() - lp) >= UINT64_C(5000000000);
+        }
+
         void RunLive(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr) {
             LogLine("   ==== LIVE MODE (M86): streaming whenever a viewer is reading and a game is running ====");
             /* M98: a release install captures only on the firmware it was
@@ -3433,7 +3483,8 @@ namespace ams::mitm::applet {
                      * may open from the HOME menu; set up again when it draws.
                      * (PR #13 ends the session itself; detach_on_home = 0 keeps
                      * it all through HOME.) */
-                    if (g_donor_mode && g_detach_on_home && pid.value != skip_pid) {
+                    if (g_donor_mode && g_detach_on_home && pid.value != skip_pid && (!have_app || LongNotPresenting())) {
+                        if (have_app) { PrepareForHomeMenu(); }   /* HOME, most likely: as the 1 s rule did, now after 5 s */
                         CaptureRelease("live");
                         if (g_ind_buf == nullptr && g_capture_handles == 0) {
                             LogLine("   live: %s - closing the engines, memory back to the system", have_app ? "the game is not on screen" : "no game");
@@ -3534,7 +3585,10 @@ namespace ams::mitm::applet {
                  * viewer stood still when a game was quit (ovl3d) */
                 else if (end == StreamEnd::GameGone && g_ui_stream_armed) { os::SleepThread(TimeSpan::FromMilliSeconds(300)); }
                 else if (end != StreamEnd::Reconfigure && end != StreamEnd::Disabled) { os::SleepThread(TimeSpan::FromSeconds(1)); }
-                else if (end == StreamEnd::Reconfigure) { os::SleepThread(TimeSpan::FromMilliSeconds(300)); }   /* a new buffer set registers slot by slot */
+                else if (end == StreamEnd::Reconfigure) {
+                    os::SleepThread(TimeSpan::FromMilliSeconds(300));   /* a new buffer set registers slot by slot */
+                    SettleAfterRebuild();
+                }
             }
         }
 
@@ -5812,16 +5866,20 @@ namespace ams::mitm::applet {
          * frames had only worked because 15 is a multiple of 3 slots. */
         struct SizeCheck {
             bool started_corner = false;
-            bool last_crop_full = false;
             u32 small_streak = 0, big_streak = 0, stale_streak = 0;
+            u32 crop_small_streak = 0;      /* v0.7.15: checks in a row with a crop inside 1280x720 */
+            u32 crop_720_streak = 0;        /* v0.7.15: ... of exactly 1280x720 */
+            bool was_full = false;          /* v0.7.15: a 1920x1080 crop this session */
             ContentProbe last[8] = {};      /* per slot */
             u64 next_ns = 0;
 
             static bool CropFull(u32 crop) { return (crop >> 16) >= 1920 && (crop & 0xFFFF) >= 1080; }
             static bool CropSmall(u32 crop) { return crop != 0 && (crop >> 16) <= 1280 && (crop & 0xFFFF) <= 720; }
+            /* v0.7.15: wider or taller than the handheld corner - not a 720p picture */
+            static bool CropBig(u32 crop) { return crop != 0 && ((crop >> 16) > 1280 || (crop & 0xFFFF) > 720); }
 
             explicit SizeCheck(bool corner) : started_corner(corner),
-                last_crop_full(CropFull(g_queue_crop_wh.load(std::memory_order_relaxed))),
+                was_full(CropFull(g_queue_crop_wh.load(std::memory_order_relaxed))),
                 next_ns(armTicksToNs(armGetSystemTick()) + UINT64_C(250000000)) {}
 
             /* nullptr, or why the stream restarts at the other size (g_size_hint set) */
@@ -5829,15 +5887,24 @@ namespace ams::mitm::applet {
                 const u64 now = armTicksToNs(armGetSystemTick());
                 if (now < next_ns) { return nullptr; }
                 next_ns = now + UINT64_C(250000000);
-                const u32 crop = g_queue_crop_wh.load(std::memory_order_relaxed);
+                /* v0.7.16: a crop in the middle (Kingdom Hearts zooming in) says nothing about the mode */
+                const u32 crop = g_queue_crop_origin0.load(std::memory_order_relaxed) ? g_queue_crop_wh.load(std::memory_order_relaxed) : 0;
                 const bool crop_full = CropFull(crop);
-                const bool shrank = last_crop_full && CropSmall(crop);
-                last_crop_full = crop_full;
-                if (!started_corner && shrank) { return Switch(true, "the game switched to a 720p picture (its picture size went to 1280x720)"); }
+                /* v0.7.15: a dynamic resolution dips into 1280x720 for a moment
+                 * docked too (Super Mario Galaxy): 720p once the crop is
+                 * exactly 1280x720 for 0.5 s (a game back in handheld says so
+                 * at once - XCX), or anything inside it for 2 s. The dip itself
+                 * is drawn right meanwhile (CropDynamic). */
+                was_full = was_full || crop_full;
+                crop_small_streak = CropSmall(crop) ? crop_small_streak + 1 : 0;
+                crop_720_streak = crop == (1280u << 16 | 720u) ? crop_720_streak + 1 : 0;
+                const bool small_now = crop_720_streak >= 2 || crop_small_streak >= 8;
+                if (!started_corner && was_full && small_now) { return Switch(true, "the game switched to a 720p picture (its picture size went to 1280x720)"); }
                 const u64 pid = g_app_pid.load(std::memory_order_relaxed);
                 if (pid != 0 && g_crop_full_pid.load(std::memory_order_relaxed) == pid) {
-                    if (!started_corner && CropSmall(crop)) { return Switch(true, "the game switched to a 720p picture (its picture size is 1280x720)"); }
-                    if (started_corner && crop_full)      { return Switch(false, "the game switched to a 1080p picture (its picture size is 1920x1080)"); }
+                    if (!started_corner && small_now) { return Switch(true, "the game switched to a 720p picture (its picture size is 1280x720)"); }
+                    /* any crop bigger than the corner cannot be the handheld picture */
+                    if (started_corner && (crop_full || CropBig(crop))) { return Switch(false, "the game switched to a 1080p picture (its picture is bigger than 1280x720)"); }
                     return nullptr;
                 }
                 const ContentProbe pr = ProbeContent(dbg, addr, stride_px, bh_log2);
@@ -5886,7 +5953,8 @@ namespace ams::mitm::applet {
         /* the last per-slot buffer match (NvfSession::Calibrate): the next
          * session's first guess, so a restart (a size change, the viewer
          * reopened) starts on the right buffers */
-        struct SlotMatch { u64 addr[8]; u32 n; u32 buf; };
+        /* v0.7.16: + whose buffer set it was (pid, generation) and whether it was matched, not a give-up */
+        struct SlotMatch { u64 addr[8]; u32 n; u32 buf; u64 pid; u32 gen; bool matched; s32 score; };
         constinit SlotMatch g_slot_match = {};
 
         /* Everything one real-frame run needs, opened fresh and torn down in
@@ -6011,6 +6079,16 @@ namespace ams::mitm::applet {
                     }
                     if (hits == nslots) { std::memcpy(slot_cand, m, sizeof(slot_cand)); reused = true; }
                     guess_trusted = reused;
+                    /* v0.7.16: the same game and the same buffer set it matched
+                     * last session - keep that match. Matching again from a
+                     * still picture (Doom 3 after a save, back from a loading
+                     * pause) took three other regions (875/1000) and the
+                     * stream showed raw memory. */
+                    if (reused && g_slot_match.matched && g_slot_match.score >= 900 && g_slot_match.pid == g_app_pid.load(std::memory_order_relaxed) &&
+                        g_slot_match.gen == g_game_surface.generation) {
+                        sep_locked = true;
+                        LogLine("   %s: the same buffers as the last session - keeping its slot match", who);
+                    }
                 }
                 matcher.Reset(nslots, ncand);
                 sep = true;
@@ -6065,6 +6143,10 @@ namespace ams::mitm::applet {
                     sep_locked = true;
                     g_slot_match.n = nslots;
                     g_slot_match.buf = buf_bytes;
+                    g_slot_match.pid = g_app_pid.load(std::memory_order_relaxed);
+                    g_slot_match.gen = g_game_surface.generation;
+                    g_slot_match.matched = true;
+                    g_slot_match.score = weakest;   /* only a clear match is kept for the next session */
                     char line[200];
                     int len = std::snprintf(line, sizeof(line), "   swapchain: slots matched to their buffers after %u frame intervals (weakest score %d/1000):",
                                             matcher.intervals, weakest);
@@ -6267,7 +6349,7 @@ namespace ams::mitm::applet {
                 return 1;
             }
 
-            struct PresentSnap { u32 count; s32 slot; u32 fence_n; u64 fence[4]; u64 tick; u32 transform; u32 crop; };
+            struct PresentSnap { u32 count; s32 slot; u32 fence_n; u64 fence[4]; u64 tick; u32 transform; u32 crop; u32 crop_c; };
 
             /* present c from the ring; false if it was overwritten (8+ behind) */
             static bool ReadPresent(u32 c, PresentSnap *out) {
@@ -6282,6 +6364,7 @@ namespace ams::mitm::applet {
                     out->tick    = r.tick.load(std::memory_order_relaxed);
                     out->transform = r.transform.load(std::memory_order_relaxed);
                     out->crop    = r.crop.load(std::memory_order_relaxed);
+                    out->crop_c  = r.crop_c.load(std::memory_order_relaxed);
                     std::atomic_thread_fence(std::memory_order_acquire);
                     if (r.seq.load(std::memory_order_relaxed) == s1) { return out->count == c; }
                 }
@@ -6379,6 +6462,7 @@ namespace ams::mitm::applet {
                         present_tick = pick.tick;
                         present_flip = pick.transform & 3;
                         cap_crop = pick.crop;
+                        cap_crop_c = pick.crop_c;
                         const s32 slot = pick.slot;
                         this->Calibrate(dbg, pick.count, slot);
                         if (!this->ReadSlot(dbg, this->SlotAddr(slot_base, slot), read_ns, sig)) { return false; }
@@ -6418,6 +6502,7 @@ namespace ams::mitm::applet {
                     present_tick = g_queue_tick.load(std::memory_order_relaxed);
                     present_flip = g_queue_transform.load(std::memory_order_relaxed) & 3;
                     cap_crop = g_queue_crop_origin0.load(std::memory_order_relaxed) ? g_queue_crop_wh.load(std::memory_order_relaxed) : 0;
+                    cap_crop_c = g_queue_crop_c.load(std::memory_order_relaxed);
                     std::atomic_thread_fence(std::memory_order_acquire);
                     if (g_queue_seq.load(std::memory_order_relaxed) == s1) { break; }
                 }
@@ -6547,6 +6632,7 @@ namespace ams::mitm::applet {
              * (Smash presents 1280x720 while drawing 1920x1080). */
             u32 crop_used = 0;
             u32 cap_crop = 0;          /* v0.7.13: the captured present's crop (PresentRec::crop) */
+            u32 cap_crop_c = 0;        /* v0.7.16: ... when it sits in the middle (PresentRec::crop_c) */
             u32 last_read_bytes = 0;   /* v0.7.13: how much of the slot ReadSlot copied */
             /* crop: the captured present's (cap_crop) */
             static u32 PresentRect(const SrcDesc &d, u32 crop) {
@@ -6569,11 +6655,91 @@ namespace ams::mitm::applet {
                 d.rect_h = use & 0xFFFF;
             }
 
+            /* v0.7.15: dynamic resolution on a 1920x1080 surface - Super Mario
+             * Galaxy draws 992x704 ... 1280x720 into the handheld corner (and
+             * less than 1920x1080 docked) and presents just that part, which
+             * the screen stretches; the rest of the slot holds older, bigger
+             * frames (stripes at the right and the bottom of the stream). The
+             * VIC samples only the present's crop, scaled to the whole stream.
+             * Only a crop inside what the size check picked, smaller than it,
+             * of a sane shape (1.2 to 2.4 wide per tall): Smash presents
+             * 1280x720 while drawing 1920x1080, so exactly 1280x720 is left
+             * to the size check. 0: no such crop. */
+            /* v0.7.16: who scales it. The PC viewer does, better: the VIC here
+             * has no filter table (FilterLength 2 came out "very blurry",
+             * ovl4), so its stretch is blocky, and with the crop changing every
+             * frame the textures shimmer (video, 1080p). For the viewer the
+             * picture stays 1:1 - as sharp as before - and the crop goes in
+             * the frame's header (dyn_out); the viewer shows only that part,
+             * scaled with its own filter / FSR. A webcam (UVC) cannot be told:
+             * there the VIC scales (dyn_vic). */
+            bool dyn_vic = true;
+            u32 dyn_out = 0;           /* this frame's crop in stream pixels (w << 16 | h), 0: the whole picture */
+            bool dyn_center = false;   /* v0.7.16: ... in the middle of the picture, not from its top left */
+            u32 center_frames = 0;     /* v0.7.16: frames sent with a centred crop this session */
+            u32 dyn_frames = 0;        /* frames sampled through a dynamic crop this session */
+            u32 dyn_min = 0, dyn_max = 0;   /* their smallest and biggest crop (w << 16 | h), for the log */
+            static u32 DynamicRect(const SrcDesc &d, u32 crop) {
+                const u32 cw = crop >> 16, ch = crop & 0xFFFF;
+                const bool ok = crop != 0 && cw >= 320 && ch >= 180
+                             && cw <= d.rect_w && ch <= d.rect_h && (cw < d.rect_w || ch < d.rect_h)
+                             && !(cw == 1280 && ch == 720)
+                             && cw * 10 >= ch * 12 && cw * 10 <= ch * 24;
+                return ok ? crop : 0;
+            }
+            /* v0.7.16: Kingdom Hearts presents a part in the MIDDLE of its
+             * surface - (96,54)-(1824,1026) down to (480,270)-(1440,810) as it
+             * zooms in, and the screen shows only that part, stretched; the
+             * rest of the slot is old picture (the glitch at the edges). The
+             * whole surface is still converted 1:1; the viewer is told the
+             * middle part (header bit 6 with the crop) and shows only that. */
+            void CropCentered(const SrcDesc &d, const OutDesc &out) {
+                if (dyn_vic || dyn_out != 0 || cap_crop_c == 0 || d.rect_w != d.w || d.rect_h != d.h) { return; }
+                const u32 cw = cap_crop_c >> 16, ch = cap_crop_c & 0xFFFF;
+                if (cw < 320 || ch < 180 || cw > d.w || ch > d.h) { return; }
+                const u32 ow = static_cast<u32>(static_cast<u64>(cw) * out.w / d.w) & ~1u;
+                const u32 oh = static_cast<u32>(static_cast<u64>(ch) * out.h / d.h) & ~1u;
+                if (ow == 0 || oh == 0 || (ow >= out.w && oh >= out.h)) { return; }
+                if (center_frames++ == 0) {
+                    LogLine("   nvf: the game presents a part in the middle of its %ux%u picture (%ux%u) - the viewer shows only that part", d.w, d.h, cw, ch);
+                }
+                dyn_out = ow << 16 | oh;
+                dyn_center = true;
+            }
+
+            void CropDynamic(SrcDesc &d, const OutDesc &out) {
+                dyn_out = 0;
+                const u32 use = DynamicRect(d, cap_crop);
+                if (use == 0) { return; }
+                if (dyn_frames++ == 0) {
+                    LogLine("   nvf: dynamic resolution - the game presents %ux%u of the %ux%u it was sized for; %s",
+                            use >> 16, use & 0xFFFF, d.rect_w, d.rect_h,
+                            dyn_vic ? "the VIC scales the presented part to the stream" : "the viewer shows only that part (the crop goes in each frame's header)");
+                }
+                const u32 area = (use >> 16) * (use & 0xFFFF);
+                if (dyn_min == 0 || area < (dyn_min >> 16) * (dyn_min & 0xFFFF)) { dyn_min = use; }
+                if (area > (dyn_max >> 16) * (dyn_max & 0xFFFF)) { dyn_max = use; }
+                if (!dyn_vic) {
+                    /* in the stream's pixels (the VIC may still scale the whole
+                     * picture: 1080p to 720p), even for the 4:2:0 chroma */
+                    const u32 ow = static_cast<u32>(static_cast<u64>(use >> 16) * out.w / d.rect_w) & ~1u;
+                    const u32 oh = static_cast<u32>(static_cast<u64>(use & 0xFFFF) * out.h / d.rect_h) & ~1u;
+                    if (ow != 0 && oh != 0 && (ow < out.w || oh < out.h)) { dyn_out = ow << 16 | oh; }
+                    return;
+                }
+                d.rect_w = use >> 16;
+                d.rect_h = use & 0xFFFF;
+            }
+
             /* RGB -> BT.709 NV12, 16-row block-linear, into the arena */
             bool Vic(const char *stage, u32 cur = 0) {
                 g_strip_src = src;
-                if (!size_check_ok) { CropToPresent(g_strip_src); }
                 g_strip_out = Lay().out;
+                dyn_out = 0;
+                dyn_center = false;
+                if (!size_check_ok) { CropToPresent(g_strip_src); }
+                else { CropDynamic(g_strip_src, g_strip_out); }   /* v0.7.15 */
+                CropCentered(g_strip_src, g_strip_out);             /* v0.7.16 */
                 g_strip_flip = present_flip;
                 /* v0.7.14: the overlays showing now, over the game (not on a
                  * flipped present: the output flip would mirror them) */
@@ -6641,6 +6807,20 @@ namespace ams::mitm::applet {
         };
 
         /* M84: a read fails for one expected reason - the game was closed */
+        /* v0.7.16: a game's slot could not be read - it is quitting. Give the
+         * donor's Applet-pool memory back at once, as for a game that stopped
+         * presenting: what comes next may need it. Kingdom Hearts' launcher
+         * (010090c022978000) quits and starts the game (...003) - with the
+         * 41 MB still held, the game never started and the console hung on a
+         * black screen; the 1 s stall that used to free it (v0.7.13) had not
+         * come yet, and with the HOME menu streaming it was never freed. The
+         * HOME menu's stream then starts after the 5 s hold instead. */
+        void GameLeft() {
+            if (g_ui_session_active.load(std::memory_order_relaxed)) { return; }   /* a HOME-menu session: vi, not a game */
+            LogLine("   live: the game quit while streaming - giving the donor's memory back for what starts next");
+            PrepareForHomeMenu();
+        }
+
         const char *SlotReadFailure() {
             return DebugPumpTargetGone() ? "slot read failed: the game exited" : "slot read failed";
         }
@@ -6895,7 +7075,12 @@ namespace ams::mitm::applet {
          * the whole surface */
         bool ShotFromSession(const NvfSession &s) {
             const u32 shown = s.size_check_ok ? (s.src.w << 16 | s.src.h) : NvfSession::PresentRect(s.src, s.cap_crop);   /* v0.7.13: what the game shows */
-            const u32 w = s.corner ? NvfW : shown >> 16, h = s.corner ? NvfH : shown & 0xFFFF;
+            u32 w = s.corner ? NvfW : shown >> 16, h = s.corner ? NvfH : shown & 0xFFFF;
+            if (s.size_check_ok) {          /* v0.7.15: dynamic resolution - only the presented part */
+                SrcDesc r = s.src;
+                r.rect_w = w; r.rect_h = h;
+                if (const u32 dyn = NvfSession::DynamicRect(r, s.cap_crop); dyn != 0) { w = dyn >> 16; h = dyn & 0xFFFF; }
+            }
             const size_t n = s.CornerFast() ? static_cast<size_t>(CornerBlockRows) * FbBlockRow : s.buf_bytes;
             return WriteShot(g_shot_out, g_ind_buf, n, w, h, s.src.stride_px * 4, s.src.blk_h_log2, s.src.pixfmt == vic::PIXFMT_A8B8G8R8, s.present_flip);
         }
@@ -7036,7 +7221,7 @@ namespace ams::mitm::applet {
                         const u64 age_ns = armTicksToNs(armGetSystemTick() - qt);
                         if (age_ns >= UINT64_C(1000000000)) {
                             why = "HOME / game stopped presenting";
-                            if (!g_ui_stream_armed) { PrepareForHomeMenu(); }   /* v0.7.14: the HOME menu streams next */
+                            /* v0.7.16: not here - a loading screen stops presenting too (Doom 3, Duke Nukem: ~7 s without picture each time); the wait for the game gives the memory back after 5 s (LongNotPresenting) */
                             end = StreamEnd::GameGone;
                             break;
                         }
@@ -7057,7 +7242,7 @@ namespace ams::mitm::applet {
                     o_t0 = t0; o_sent0 = sent; o_q0 = qn;
                 }
                 u64 rn = 0; u32 sg = 0;
-                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = SlotReadFailure(); end = StreamEnd::GameGone; break; }
+                if (!s.Capture(dbg, slot_base, std::addressof(rn), std::addressof(sg), std::addressof(dropped))) { why = SlotReadFailure(); GameLeft(); end = StreamEnd::GameGone; break; }
                 const u64 t1 = armTicksToNs(armGetSystemTick());
                 if (!s.Vic("uvcraw:vic", L.off_cur)) { why = "VIC did not complete"; end = StreamEnd::Failed; break; }
                 if (TakeShotRequest()) { static_cast<void>(ShotFromSession(s)); }
@@ -7160,6 +7345,7 @@ namespace ams::mitm::applet {
              * v0.4: a webcam sends the size its host committed to, whatever
              * the game draws - the VIC scales either way (up, too) */
             const bool uvc = g_uvc_mode;
+            s.dyn_vic = uvc;               /* v0.7.16: the viewer scales a dynamic crop itself */
             u32 uvc_w = 0, uvc_h = 0;
             if (uvc) { UvcFrameSize(std::addressof(uvc_w), std::addressof(uvc_h)); g_uvc_new_consumer.store(false, std::memory_order_relaxed); }
             const bool fits1080 = g_ind_size >= NvfArenaBase + Layout1080().arena_size_pipe;
@@ -7287,7 +7473,7 @@ namespace ams::mitm::applet {
             u64 t_window = loop_t0;
             /* One encode "in flight": submitted, not yet collected. Collecting
              * it waits for NVENC, then sends the frame exactly as before. */
-            struct InFlight { bool active; u32 i; u32 pic; u32 fence; u64 t_submit; bool is_idr; u32 pos; u64 present_ns, rn, vic_ns, t0, t1, flush_ns; };
+            struct InFlight { bool active; u32 i; u32 pic; u32 fence; u64 t_submit; bool is_idr; u32 pos; u64 present_ns, rn, vic_ns, t0, t1, flush_ns; u32 crop = 0; bool center = false; };
             u64 w_read = 0, w_flush = 0, w_vic = 0, w_enc = 0, w_fence0 = 0;
             u32 w_n = 0, w_sent0 = 0, w_fwait0 = 0, w_ready0 = 0, w_waited0 = 0, w_drop0 = 0;
             u64 w_t0 = armTicksToNs(armGetSystemTick());
@@ -7409,11 +7595,11 @@ namespace ams::mitm::applet {
                 SftHdrWire h = {};
                 h.magic = 0x52544653u;        /* "SFTR" */
                 h.version = 2;
-                h.flags = static_cast<u16>(2 | (f.is_idr ? 4 : 0));   /* bit 1: H.264 AU; bit 2: IDR */
+                h.flags = static_cast<u16>(2 | (f.is_idr ? 4 : 0) | (f.crop != 0 ? 32 : 0) | (f.crop != 0 && f.center ? 64 : 0));   /* bit 1: H.264 AU; bit 2: IDR; bit 5: crop; bit 6: it is centred */
                 h.width = L.w; h.height = L.h;
                 h.stride = static_cast<u32>(age / 1000);               /* M85: console-side age, us */
                 h.length = payload;
-                h.block_h_log2 = 0;
+                h.block_h_log2 = f.crop;      /* v0.7.16: with bit 5, the part of the picture to show (w << 16 | h, from the top left) */
                 h.kind = f.i;                 /* frame number */
                 std::memcpy(g_usb_hdr, std::addressof(h), sizeof(h));
                 size_t hs = 0;
@@ -7492,7 +7678,7 @@ namespace ams::mitm::applet {
                             /* Free the 42 MB donor before SwitchU Album inits,
                              * and hold re-setup so a connected viewer does not
                              * remount it mid-handoff. */
-                            if (!g_ui_stream_armed) { PrepareForHomeMenu(); }   /* v0.7.14: the HOME menu streams next */
+                            /* v0.7.16: not here - a loading screen stops presenting too (Doom 3, Duke Nukem: ~7 s without picture each time); the wait for the game gives the memory back after 5 s (LongNotPresenting) */
                             end = StreamEnd::GameGone;
                             break;
                         }
@@ -7541,7 +7727,7 @@ namespace ams::mitm::applet {
                 s.idle_work = {};
                 s.early_poll = false;
                 if (hook_stop) { break; }
-                if (!got) { why = SlotReadFailure(); end = StreamEnd::GameGone; break; }
+                if (!got) { why = SlotReadFailure(); if (live) { GameLeft(); } end = StreamEnd::GameGone; break; }
                 const u64 present_ns = armTicksToNs(s.present_tick);
                 const u64 t1 = armTicksToNs(armGetSystemTick());
                 /* pipelined, frame i goes to the picture frame i-1 is NOT being encoded from */
@@ -7638,7 +7824,7 @@ namespace ams::mitm::applet {
                     j.me_in  = mes[(pos - 1) & 1];
                     j.me_out = mes[pos & 1];
                 }
-                fl = InFlight{ true, i, pic++, 0, 0, pos == 0, pos, present_ns, rn, t2 - t1, t0, t1, s.last_flush_ns };
+                fl = InFlight{ true, i, pic++, 0, 0, pos == 0, pos, present_ns, rn, t2 - t1, t0, t1, s.last_flush_ns, s.dyn_out, s.dyn_center };
                 if (NvfSubmit(s.x, fl.pic, j, std::addressof(fl.fence), std::addressof(fl.t_submit)) != 0) {
                     fl.active = false; why = "NVENC submit rejected"; end = StreamEnd::Failed; break;
                 }
@@ -7754,6 +7940,13 @@ namespace ams::mitm::applet {
              * until the next stream's first frame is out. */
             if (end == StreamEnd::GameGone || end == StreamEnd::Reconfigure) { LogDefer(true); }
             LogLine("   nvstream: stopped: %s", why);
+            if (s.center_frames != 0) {   /* v0.7.16 */
+                LogLine("   nvstream: a centred crop in %u frames (the viewer showed only the middle)", s.center_frames);
+            }
+            if (s.dyn_frames != 0) {      /* v0.7.15 */
+                LogLine("   nvstream: dynamic resolution in %u frames, %ux%u to %ux%u", s.dyn_frames,
+                        s.dyn_min >> 16, s.dyn_min & 0xFFFF, s.dyn_max >> 16, s.dyn_max & 0xFFFF);
+            }
             if (audio_bytes != 0) {
                 LogLine("   nvstream: game audio %llu KB in %u packets (%llu ms of sound)", static_cast<unsigned long long>(audio_bytes / 1024), audio_seq,
                         static_cast<unsigned long long>(audio_bytes / 192));

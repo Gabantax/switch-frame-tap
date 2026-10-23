@@ -78,6 +78,13 @@ namespace ams::mitm::applet {
          * Library applets a game opens still get the memory back first
          * (PrepareForApplet). */
         constexpr u64 TightMb = 48;
+        /* v0.7.16: with a web applet open, this much more must stay free
+         * beside us. Super Mario 3D All-Stars runs each game with OfflineWeb
+         * (0x17) open the whole time and the pool at ~287 of 500 MB: "a web
+         * applet runs" alone kept the stream off for the whole game. The
+         * browser and the eShop take (nearly) the whole pool, so they still
+         * keep it off; the pool watch stops it if one grows into this. */
+        constexpr u64 WebRoomMb = 96;
         /* v0.7.14: the smallest donor that streams 720p (capture region
          * >= ~22 MB plus the engine buffers) and the usual one */
         constexpr u32 MinDonorMb = 30, FullDonorMb = 42;
@@ -194,7 +201,8 @@ namespace ams::mitm::applet {
                 if (mb < checked_mb) { checked_mb = mb; }
                 const bool tight = (lim >> 20) - mb < TightMb;
                 bool web = false;
-                if (mb >= checked_mb + 32 || tight) { checked_mb = mb; web = WebAppletRunning(); }
+                /* v0.7.16: a web applet beside us only matters once it leaves less than WebRoomMb */
+                if (mb >= checked_mb + 32 || tight) { checked_mb = mb; web = (lim >> 20) - mb < WebRoomMb && WebAppletRunning(); }
                 const bool trigger = web || tight;
                 if (trigger) {
                     LogDefer(true);   /* written once the memory is back (DonorRelease) */
@@ -286,7 +294,8 @@ namespace ams::mitm::applet {
         if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { return false; }
         const u64 mb = cur >> 20;
         if (out_mb != nullptr) { *out_mb = mb; }
-        return WebAppletRunning() || (lim >> 20) - mb < MinDonorMb + TightMb;
+        const u64 free_mb = (lim >> 20) - mb;
+        return free_mb < MinDonorMb + TightMb || (free_mb < MinDonorMb + TightMb + WebRoomMb && WebAppletRunning());
     }
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {

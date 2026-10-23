@@ -41,7 +41,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.7.14-beta2";
+    constexpr const char *AppVersion  = "0.7.14";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -225,6 +225,7 @@ namespace {
         std::string early = "1";  /* v0.7.12: early_collect (1 / 0 / ab); kept when saving */
         bool home_menu = false;   /* v0.7.14: stream the HOME menu and system applets too (beta); from the next boot */
         bool overlays = false;    /* v0.7.14: the system overlays in the stream (beta); from the next boot */
+        bool update_betas = false;/* v0.7.14: "Check for updates" offers pre-releases too (this app's own key) */
         int conn = 0;           /* v0.7: connection - 0 USB (PC viewer), 1 USB webcam, 2 (v0.7.7) USB webcam NV12, 3 network; from the next boot */
     };
 
@@ -274,6 +275,7 @@ namespace {
         if (IniGet(ini, "audio", &v)) { s.audio = v != "0"; }
         if (IniGet(ini, "home_menu", &v)) { s.home_menu = v == "1"; }
         if (IniGet(ini, "overlays", &v)) { s.overlays = v == "1"; }
+        if (IniGet(ini, "update_betas", &v)) { s.update_betas = v == "1"; }
         /* the v0.4-v0.7 keys first, then the one that replaced them */
         if (IniGet(ini, "usb_mode", &v) && v == "webcam") { s.conn = 1; }
         if (IniGet(ini, "network", &v) && v == "1") { s.conn = ConnNetwork; }
@@ -326,10 +328,12 @@ namespace {
             "# home_menu: 1 = also stream the HOME menu and the system applets when no game is on screen (beta). Read at boot.\n"
             "home_menu = %d\n"
             "# overlays: 1 = the volume bar, quick settings, power menu and Tesla/Ultrahand menus in the stream (beta). Read at boot.\n"
-            "overlays = %d\n",
+            "overlays = %d\n"
+            "# update_betas: 1 = Check for updates in the app also offers betas (pre-releases)\n"
+            "update_betas = %d\n",
             QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080",
             DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, custom, s.shot_album ? "album" : "app", s.detach_home ? 1 : 0, s.screen_off ? 1 : 0, s.early.c_str(),
-            s.audio ? 1 : 0, ConnKeys[s.conn], s.home_menu ? 1 : 0, s.overlays ? 1 : 0);
+            s.audio ? 1 : 0, ConnKeys[s.conn], s.home_menu ? 1 : 0, s.overlays ? 1 : 0, s.update_betas ? 1 : 0);
         std::fclose(f);
         return true;
     }
@@ -390,6 +394,7 @@ namespace {
     bool g_open_gallery = false;
     bool g_record_combo = false;   /* v0.7.11: the custom screenshot combo's recording screen */
     const extras::Tool *g_pending_install = nullptr;   /* v0.7.5: Get extras - run from the main loop */
+    int g_pending_update = 0;      /* v0.7.14: 1 check for an update, 2 install it - run from the main loop */
 
     struct App {
         Settings set = LoadSettings();
@@ -406,6 +411,11 @@ namespace {
         std::string free_mem, others;                        /* v0.7.13: launcher.txt */
         std::string toast;
         u32 toast_frames = 0;
+        /* v0.7.14: Switch Frame Tap's own updates (extras::CheckUpdate) */
+        enum class Upd { Unknown, Latest, Found, Installed, Failed } upd = Upd::Unknown;
+        extras::Release upd_rel;
+        std::string upd_msg;
+        bool confirm_update = false;
         std::vector<Page> pages;
         int page = 0;
         bool in_content = false;    /* the keys move in the page (else in the sidebar) */
@@ -885,6 +895,51 @@ namespace {
                 pages.push_back(std::move(p));
             }
 
+            /* ---- Updates (v0.7.14) ---- */
+            {
+                Page p{ "Updates", {} };
+                p.rows.push_back(Section("From this project's GitHub releases"));
+                p.rows.push_back(Action("Check for updates", [this] {
+                        switch (upd) {
+                            case Upd::Latest:    return std::string("Up to date");
+                            case Upd::Found:     return upd_rel.tag + " is available";
+                            case Upd::Installed: return upd_rel.tag + " installed";
+                            case Upd::Failed:    return upd_msg;
+                            default:             return std::string("Not checked yet");
+                        }
+                    }, [](int) { g_pending_update = 1; },
+                    "Asks GitHub for the newest Switch Frame Tap - only full releases, unless \"Include betas\" below is on. "
+                    "The console must be online.",
+                    [this] { return upd == Upd::Found ? ui::Good : upd == Upd::Failed ? ui::Warn : upd == Upd::Installed ? ui::Acc : ui::Dim; }));
+                p.rows.push_back(Action("Install the update", [this] {
+                        if (upd == Upd::Installed) { return std::string("Restart the console to finish"); }
+                        if (upd != Upd::Found) { return std::string("-"); }
+                        return confirm_update ? "A again: install " + upd_rel.tag : upd_rel.tag;
+                    }, [this](int) {
+                        if (upd == Upd::Installed) { Toast("Restart the console: hold POWER, Power Options, Restart"); return; }
+                        if (upd != Upd::Found) { Toast("Check for updates first"); return; }
+                        if (!confirm_update) { confirm_update = true; return; }
+                        confirm_update = false;
+                        g_pending_update = 2;
+                    },
+                    "Downloads the new version's Switch zip and puts it on the SD card, as a manual update would: the "
+                    "sysmodule, the memory helper, the overlay and this app. Your settings are kept. The console runs the new "
+                    "version after a restart.",
+                    [this] { return confirm_update ? ui::Warn : upd == Upd::Found ? ui::Good : upd == Upd::Installed ? ui::Acc : ui::Dim; }));
+                p.rows.push_back(Toggle("Include betas", [this] { return set.update_betas; },
+                    [this](int) {
+                        set.update_betas = !set.update_betas;
+                        if (!SaveSettings(set)) { Toast("Could not write config.ini"); return; }
+                        if (upd == Upd::Latest || upd == Upd::Found) { upd = Upd::Unknown; }
+                        Toast(set.update_betas ? "Betas are offered too - check again" : "Only full releases are offered");
+                    },
+                    "Betas (pre-releases) try new things before a full release. They work for most people, but have had "
+                    "less testing - turn this off to stay on full releases."));
+                p.rows.push_back(Info("This version", [] { return std::string(AppVersion); }, nullptr,
+                    "The version of this app. The sysmodule and the overlay come in the same zip, so they match it."));
+                pages.push_back(std::move(p));
+            }
+
             /* ---- About ---- */
             {
                 Page p{ "About", {} };
@@ -913,7 +968,7 @@ namespace {
         Page &Cur() { return pages[page]; }
         const Row *CurRow() { Page &p = Cur(); return (in_content && p.sel >= 0) ? &p.rows[p.sel] : nullptr; }
 
-        void Unconfirm() { confirm_clear = false; confirm_extra = -1; }
+        void Unconfirm() { confirm_clear = false; confirm_extra = -1; confirm_update = false; }
 
         void GoPage(int i) {
             Unconfirm();
@@ -979,7 +1034,8 @@ namespace {
         cx += ui::Chip(a.ConnShort(), cx, cy, ui::Acc) + 8;
         if (a.RunningHomeMenu()) { cx += ui::Chip("HOME menu", cx, cy, ui::Good) + 8; }
         if (a.RunningOverlays()) { cx += ui::Chip("Overlays", cx, cy, ui::Good) + 8; }
-        if (!a.StreamOn() && a.installed) { ui::Chip("Stream off", cx, cy, ui::Faint); }
+        if (!a.StreamOn() && a.installed) { cx += ui::Chip("Stream off", cx, cy, ui::Faint) + 8; }
+        if (a.upd == App::Upd::Found) { ui::Chip("Update " + a.upd_rel.tag + " available", cx, cy, ui::Warn); }
         if (streaming) {
             char b[32];
             std::snprintf(b, sizeof(b), "%u.%u", a.st.fps_x10 / 10, a.st.fps_x10 % 10);
@@ -1408,6 +1464,40 @@ namespace {
         app.Refresh();
     }
 
+    /* v0.7.14: Check for updates / Install the update, with its progress on
+     * screen; B cancels */
+    void RunUpdate(App &app, PadState &pad, int mode) {
+        const char *title = mode == 1 ? "Check for updates" : "Update";
+        auto draw = [title](const char *what, double frac) {
+            DrawProgressCard(title, "Switch Frame Tap", what, frac, "From this project's GitHub releases");
+            DrawHints({ { "\uE0A1", 'B', "Cancel" } }, 0);
+            SDL_RenderPresent(ui::g_ren);
+        };
+        u32 tick = 0;
+        extras::Progress progress = [&](const char *what, double frac) {
+            if (!appletMainLoop()) { return false; }
+            padUpdate(&pad);
+            if (padGetButtonsDown(&pad) & HidNpadButton_B) { return false; }
+            if ((++tick % 4) == 0 || frac < 0.0) { draw(what, frac); }
+            return true;
+        };
+        draw("Connecting...", -1.0);
+        std::string err, done;
+        if (mode == 1) {
+            const int r = extras::CheckUpdate(AppVersion, app.set.update_betas, &app.upd_rel, progress, &err);
+            if (r < 0) { app.upd = App::Upd::Failed; app.upd_msg = err; app.Toast("Could not check: " + err); }
+            else if (r == 0) { app.upd = App::Upd::Latest; app.Toast(std::string("Switch Frame Tap ") + AppVersion + " is the newest"); }
+            else { app.upd = App::Upd::Found; app.Toast(app.upd_rel.tag + " is available - Install the update below"); }
+        } else if (extras::InstallUpdate(app.upd_rel, progress, &done, &err)) {
+            app.upd = App::Upd::Installed;
+            app.Toast(done);
+        } else {
+            app.upd_msg = err;
+            app.Toast("The update did not finish: " + err);
+        }
+        app.Refresh();
+    }
+
     /* touch on the main screen: a tap (lifted where it went down) acts; a
      * drag scrolls the page */
     struct Touch {
@@ -1539,6 +1629,7 @@ int main(int, char **) {
         }
 
         if (g_pending_install != nullptr) { RunInstall(app, pad); touch = {}; continue; }
+        if (g_pending_update != 0) { const int m = g_pending_update; g_pending_update = 0; RunUpdate(app, pad, m); touch = {}; continue; }
         if (g_record_combo) { g_record_combo = false; RecordCombo(app, pad); touch = {}; continue; }
         if (g_open_gallery) {
             g_open_gallery = false;

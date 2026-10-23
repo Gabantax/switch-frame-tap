@@ -53,6 +53,9 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private EditText ip;
     private Button action, settingsButton, homeUsb, homeNet, drawerUsb, drawerNet;
     private Ui.Toggle muteToggle, stableToggle, statsToggle;
+    private Updater updater;                       // v0.7.14: updates from GitHub
+    private Button updateButton, updateAction;
+    private TextView updateStatus;
     private LinearLayout ipRow;
     private boolean usbMode, resumed, surfaceReady, requested, tv, showingVideo;
     private boolean mute, stable, stats;
@@ -109,8 +112,10 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         hl.setMargins(dp(10), dp(10), 0, 0);
         root.addView(hud, hl);
+        updater = new Updater(this, this::updateUpdater);
         buildHome();
         buildDrawer();
+        if (prefs.getBoolean("update_check", true)) updater.check(prefs.getBoolean("update_betas", false));
 
         IntentFilter filter = new IntentFilter(usbAction());
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(permissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
@@ -183,6 +188,11 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         });
         LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-2, dp(42)); al.topMargin = dp(14);
         card.addView(action, al);
+
+        updateButton = Ui.pill(this, "", true, v -> updateClicked());   // v0.7.14: a newer app on GitHub
+        updateButton.setVisibility(View.GONE);
+        LinearLayout.LayoutParams ul = new LinearLayout.LayoutParams(-2, dp(42)); ul.topMargin = dp(10);
+        card.addView(updateButton, ul);
 
         if (tv) {
             LinearLayout hints = new LinearLayout(this); hints.setGravity(Gravity.CENTER);
@@ -280,6 +290,25 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
             hud.setVisibility(value && engine != null ? View.VISIBLE : View.GONE);
         });
 
+        section(body, "UPDATES");
+        LinearLayout upd = new LinearLayout(this); upd.setGravity(Gravity.CENTER_VERTICAL);
+        upd.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout ut = new LinearLayout(this); ut.setOrientation(LinearLayout.VERTICAL);
+        ut.addView(Ui.text(this, "Switch Frame Tap " + Updater.version(this), 16, Ui.INK, false));
+        updateStatus = Ui.text(this, "", 13, Ui.DIM, false); updateStatus.setPadding(0, dp(5), 0, 0);
+        ut.addView(updateStatus);
+        upd.addView(ut, new LinearLayout.LayoutParams(0, -2, 1));
+        updateAction = Ui.pill(this, "Check", false, v -> updateClicked());
+        LinearLayout.LayoutParams ual = new LinearLayout.LayoutParams(-2, dp(38)); ual.leftMargin = dp(12);
+        upd.addView(updateAction, ual);
+        body.addView(upd);
+        toggleRow(body, "Include betas", "Offer test versions too, not only full releases", prefs.getBoolean("update_betas", false), value -> {
+            prefs.edit().putBoolean("update_betas", value).apply();
+            if (updater.state == Updater.State.LATEST || updater.state == Updater.State.FOUND) updater.check(value);
+        });
+        toggleRow(body, "Check at start-up", "Look for a new version when the app opens", prefs.getBoolean("update_check", true), value ->
+            prefs.edit().putBoolean("update_check", value).apply());
+
         section(body, "ABOUT");
         String version = "";
         try { version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
@@ -325,6 +354,35 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         body.addView(row);
         return toggle;
     }
+    /* ---- v0.7.14: updates (Updater.java) ---- */
+    private void updateClicked() {
+        switch (updater.state) {
+            case FOUND: updater.install(); break;
+            case FAILED: if (!updater.url.isEmpty()) updater.install(); else updater.check(prefs.getBoolean("update_betas", false)); break;
+            case CHECKING: case GETTING: case INSTALLING: break;
+            default: updater.check(prefs.getBoolean("update_betas", false)); break;
+        }
+    }
+    private void updateUpdater() {
+        Updater.State st = updater.state;
+        if (updateStatus != null) updateStatus.setText(updater.status(Updater.version(this)));
+        if (updateAction != null) {
+            updateAction.setText(st == Updater.State.FOUND ? "Update" : st == Updater.State.FAILED && !updater.url.isEmpty() ? "Try again" : "Check");
+            updateAction.setEnabled(st != Updater.State.CHECKING && st != Updater.State.GETTING && st != Updater.State.INSTALLING);
+            Ui.stylePill(updateAction, st == Updater.State.FOUND);
+        }
+        if (updateButton != null) {
+            boolean show = st == Updater.State.FOUND || st == Updater.State.GETTING || st == Updater.State.INSTALLING
+                    || (st == Updater.State.FAILED && !updater.url.isEmpty());
+            updateButton.setVisibility(show ? View.VISIBLE : View.GONE);
+            updateButton.setText(st == Updater.State.FOUND ? "Update to " + updater.tag
+                    : st == Updater.State.GETTING ? updater.status("")
+                    : st == Updater.State.INSTALLING ? "Confirm the install on screen"
+                    : "Update failed - try again");
+            updateButton.setEnabled(st == Updater.State.FOUND || st == Updater.State.FAILED);
+        }
+    }
+
     private void openDrawer() {
         if (drawer.getVisibility() == View.VISIBLE) return;
         scrim.setVisibility(View.VISIBLE); drawer.setVisibility(View.VISIBLE);
@@ -533,7 +591,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     }
     @Override protected void onResume() { super.onResume(); resumed = true; immersive(); startEngine(); }
     @Override protected void onPause() { resumed = false; stopEngine(); super.onPause(); }
-    @Override protected void onDestroy() { handler.removeCallbacksAndMessages(null); unregisterReceiver(permissionReceiver); super.onDestroy(); }
+    @Override protected void onDestroy() { handler.removeCallbacksAndMessages(null); unregisterReceiver(permissionReceiver); updater.release(); super.onDestroy(); }
     @Override public void surfaceCreated(SurfaceHolder holder) { surfaceReady = true; startEngine(); }
     @Override public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) { }
     @Override public void surfaceDestroyed(SurfaceHolder holder) { surfaceReady = false; stopEngine(); }

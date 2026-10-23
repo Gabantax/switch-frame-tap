@@ -73,7 +73,7 @@ SDL_STATIC=$("$SDLP/bin/sdl2-config" --static-libs | sed -e 's/-lSDL2main//' -e 
 cd "$HERE"
 xxd -i clarity.metal > clarity_shader.h
 clang -O2 -Wall -fobjc-arc -I"$SDLP/include" $("$SDLP/bin/sdl2-config" --cflags) -c clarity.m -o "$OUT/clarity.o"
-clang -O2 -Wall -DSFT_H264 -DSFT_MP4 \
+clang -O2 -Wall -DSFT_H264 -DSFT_MP4 -DSFT_VERSION="\"$VER\"" \
     -I"$FF/include" -I"$SDLP/include" $("$SDLP/bin/sdl2-config" --cflags) -I"$USBP/include" \
     -o "$OUT/switch-frame-tap-viewer" raw-view.c "$OUT/clarity.o" \
     "$FF/lib/libavformat.a" "$FF/lib/libavcodec.a" "$FF/lib/libavutil.a" \

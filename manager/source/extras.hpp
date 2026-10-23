@@ -22,6 +22,7 @@
 #include <cstring>
 #include <string>
 #include <functional>
+#include "../../common/sft_version.h"
 
 namespace extras {
 
@@ -103,19 +104,11 @@ namespace extras {
 
     struct Release { std::string tag, name, url; long long size = 0; };
 
-    /* the newest release of repo, and its first asset `match` accepts */
-    inline bool Latest(const char *repo, bool (*match)(const char *), Release *out, const Progress *p, std::string *err) {
-        char url[160];
-        std::snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases/latest", repo);
-        std::string body;
-        if (!Get(url, &body, nullptr, p, "Asking GitHub for the latest version", err)) { return false; }
-        json_error_t je;
-        json_t *root = json_loads(body.c_str(), 0, &je);
-        if (root == nullptr) { *err = "GitHub's answer could not be read"; return false; }
-        bool found = false;
-        if (const char *tag = json_string_value(json_object_get(root, "tag_name"))) { out->tag = tag; }
-        json_t *assets = json_object_get(root, "assets");
-        for (size_t i = 0; i < json_array_size(assets) && !found; ++i) {
+    /* a release's tag, and its first asset `match` accepts */
+    inline bool PickAsset(json_t *rel, bool (*match)(const char *), Release *out) {
+        if (const char *tag = json_string_value(json_object_get(rel, "tag_name"))) { out->tag = tag; }
+        json_t *assets = json_object_get(rel, "assets");
+        for (size_t i = 0; i < json_array_size(assets); ++i) {
             json_t *a = json_array_get(assets, i);
             const char *name = json_string_value(json_object_get(a, "name"));
             const char *dl = json_string_value(json_object_get(a, "browser_download_url"));
@@ -123,9 +116,37 @@ namespace extras {
                 out->name = name;
                 out->url = dl;
                 out->size = static_cast<long long>(json_integer_value(json_object_get(a, "size")));
-                found = true;
+                return true;
             }
         }
+        return false;
+    }
+
+    /* the newest release of repo, and its first asset `match` accepts. With
+     * pre: the highest version among the latest releases of any kind -
+     * GitHub lists them by date, and a fix release can come after the next
+     * version's betas (v0.7.14) */
+    inline bool Latest(const char *repo, bool (*match)(const char *), Release *out, const Progress *p, std::string *err, bool pre = false) {
+        char url[160];
+        if (pre) { std::snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases?per_page=15", repo); }
+        else { std::snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases/latest", repo); }
+        std::string body;
+        if (!Get(url, &body, nullptr, p, "Asking GitHub for the latest version", err)) { return false; }
+        json_error_t je;
+        json_t *root = json_loads(body.c_str(), 0, &je);
+        if (root == nullptr) { *err = "GitHub's answer could not be read"; return false; }
+        json_t *rel = root;
+        if (pre) {
+            rel = nullptr;
+            const char *best = nullptr;
+            for (size_t i = 0; i < json_array_size(root); ++i) {
+                json_t *r = json_array_get(root, i);
+                const char *tag = json_string_value(json_object_get(r, "tag_name"));
+                if (tag == nullptr || json_is_true(json_object_get(r, "draft"))) { continue; }
+                if (best == nullptr || sft_version_cmp(tag, best) > 0) { best = tag; rel = r; }
+            }
+        }
+        const bool found = rel != nullptr && PickAsset(rel, match, out);
         json_decref(root);
         if (!found) { *err = "its latest release has no file this app knows how to install"; }
         return found;
@@ -151,8 +172,8 @@ namespace extras {
     }
 
     /* unzip over the SD card root; files at the zip's top level (a README)
-     * are skipped */
-    inline bool Unzip(const char *zip, const Progress *p, int *written, int *kept, std::string *err) {
+     * are skipped, and so is any file skip() names (v0.7.14) */
+    inline bool Unzip(const char *zip, const Progress *p, int *written, int *kept, std::string *err, bool (*skip)(const char *) = nullptr) {
         unzFile z = unzOpen(zip);
         if (z == nullptr) { *err = "the download is not a zip file"; return false; }
         unz_global_info gi = {};
@@ -170,7 +191,7 @@ namespace extras {
             const std::string dest = std::string("sdmc:/") + name;
             if (name[nl - 1] == '/') { MakeParents(dest); continue; }
             if (std::strchr(name, '/') == nullptr) { continue; }
-            if (Keep(name) && Exists(dest.c_str())) { ++*kept; continue; }
+            if ((Keep(name) && Exists(dest.c_str())) || (skip != nullptr && skip(name))) { ++*kept; continue; }
             MakeParents(dest);
             if (unzOpenCurrentFile(z) != UNZ_OK) { *err = std::string("could not read ") + name; ok = false; break; }
             const std::string part = dest + ".part";
@@ -268,6 +289,54 @@ namespace extras {
             char b[160];
             std::snprintf(b, sizeof(b), "%s %s installed (%d file%s%s)%s", t.name, rel.tag.c_str(), written, written == 1 ? "" : "s",
                           kept ? ", your settings kept" : "", t.sysmodule ? " - restart the console to start it" : "");
+            *done = b;
+        }
+        return ok;
+    }
+
+    /* ---- v0.7.14: Switch Frame Tap itself ---------------------------------
+     * The release's -switch.zip, unzipped over the SD card root like a manual
+     * update: the sysmodule, the memory helper, the overlay, this app and the
+     * sound patches. config.ini is not in it. The boot flag is, and it is
+     * left out when the user turned "Start with the console" off. Files in
+     * use (this app, the running sysmodule) are replaced on the card; the
+     * console runs the new ones after a restart. */
+
+    constexpr const char *SelfRepo = "TomasUribe/switch-frame-tap";
+
+    inline bool SelfAsset(const char *n) { return EndsWith(n, "-switch.zip"); }
+
+    inline bool SelfSkip(const char *rel) {
+        return std::strcmp(rel, "atmosphere/contents/0100000000000C21/flags/boot2.flag") == 0
+            && !Exists("sdmc:/atmosphere/contents/0100000000000C21/flags/boot2.flag");
+    }
+
+    /* 1: rel is newer than current; 0: up to date; -1: *err says why not */
+    inline int CheckUpdate(const char *current, bool pre, Release *rel, const Progress &p, std::string *err) {
+        if (!NetUp()) { *err = "the network could not be started"; return -1; }
+        if (!Latest(SelfRepo, SelfAsset, rel, &p, err, pre)) { return -1; }
+        return sft_version_cmp(rel->tag.c_str(), current) > 0 ? 1 : 0;
+    }
+
+    inline bool InstallUpdate(const Release &rel, const Progress &p, std::string *done, std::string *err) {
+        if (!NetUp()) { *err = "the network could not be started"; return false; }
+        mkdir("sdmc:/config", 0777);
+        mkdir("sdmc:/config/switch-frame-tap", 0777);
+        mkdir("sdmc:/config/switch-frame-tap/downloads", 0777);
+        const std::string tmp = std::string("sdmc:/config/switch-frame-tap/downloads/") + rel.name + ".part";
+        FILE *f = std::fopen(tmp.c_str(), "wb");
+        if (f == nullptr) { *err = "could not write to the SD card"; return false; }
+        char what[96];
+        std::snprintf(what, sizeof(what), "Downloading Switch Frame Tap %s", rel.tag.c_str());
+        const bool got = Get(rel.url.c_str(), nullptr, f, &p, what, err);
+        std::fclose(f);
+        if (!got) { std::remove(tmp.c_str()); return false; }
+        int written = 0, kept = 0;
+        const bool ok = Unzip(tmp.c_str(), &p, &written, &kept, err, SelfSkip);
+        std::remove(tmp.c_str());
+        if (ok) {
+            char b[160];
+            std::snprintf(b, sizeof(b), "Switch Frame Tap %s installed (%d files) - restart the console to finish", rel.tag.c_str(), written);
             *done = b;
         }
         return ok;

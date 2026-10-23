@@ -23,6 +23,10 @@ namespace extras {
     inline bool HasSysClk() { return true; }
     inline bool HekateMissesHocKip() { return false; }
     inline bool Install(const Tool &, const Progress &, std::string *, std::string *err) { *err = "preview"; return false; }
+
+    struct Release { std::string tag, name, url; long long size = 0; };
+    inline int CheckUpdate(const char *, bool, Release *rel, const Progress &, std::string *) { rel->tag = "v0.7.15"; return 1; }
+    inline bool InstallUpdate(const Release &, const Progress &, std::string *, std::string *err) { *err = "preview"; return false; }
     inline void NetDown() {}
 
 }

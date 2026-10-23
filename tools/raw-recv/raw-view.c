@@ -116,6 +116,7 @@ static int g_lost = 0;              /* --app: the console left; wait for it agai
 static int g_paced = 0;             /* --paced: a recording fed through the live pipeline at 60 fps, looped (tests) */
 static double g_run_secs = 0;       /* --seconds: stop the live pipeline after this long (tests) */
 static const char *g_shot = NULL;    /* --shot: save the last frame drawn (overlay included) as BMP (tests) */
+static int g_open_settings = 0;      /* --settings: the settings drawer open at start (tests) */
 static const char *g_mp4 = NULL;     /* --mp4 FILE: record into FILE from the start (tests) */
 static const char *g_rec_dir = NULL; /* --rec-dir DIR: where R saves (default Videos/Switch Frame Tap) */
 static int g_win_w = 0, g_win_h = 0;  /* --window WxH: keep the window this size (tests) */
@@ -385,6 +386,7 @@ static const char *ip_edit_for_menu(void);   /* NULL unless an address is being 
 #include "menu.h"              /* v0.5: the main screen while there is no picture */
 #include "hud.h"               /* v0.7.2: the stats overlay (O / F3) */
 #include "picture.h"           /* v0.7.12: brightness, contrast... (P) */
+#include "update.h"            /* v0.7.14: the viewer updates itself from GitHub's releases */
 static libusb_device_handle *g_usb = NULL;
 
 /* ---- v0.7: the network transport ------------------------------------------
@@ -524,6 +526,8 @@ static void prefs_load(void)
         if (sscanf(line, "window=%d,%d,%d,%d", &g_geom_x, &g_geom_y, &g_geom_w, &g_geom_h) == 4 &&
             g_geom_w >= 160 && g_geom_h >= 90) g_geom_valid = 1;
         if (sscanf(line, "maximized=%d", &hm) == 1) g_geom_maximized = hm != 0;
+        if (sscanf(line, "update_betas=%d", &hm) == 1) g_upd_betas = hm != 0;
+        if (sscanf(line, "update_check=%d", &hm) == 1) g_upd_check = hm != 0;
     }
     fclose(f);
 }
@@ -595,6 +599,7 @@ static void prefs_save(void)
     fprintf(f, "connection=%s\nlast_ip=%s\nstats_overlay=%d\nvsync=%d\nupscaler=%s\nhwdec=%d\nlock_aspect=%d\nchromeless=%d\npicture=%d,%d,%d,%d,%d\n", g_conn == CONN_NET ? "network" : "usb", g_last_ip, g_hud, g_vsync, up_key[g_upscaler], g_hwdec, g_lock_aspect, g_chromeless,
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
+    fprintf(f, "update_betas=%d\nupdate_check=%d\n", g_upd_betas, g_upd_check);
     if (g_geom_valid)
         fprintf(f, "window=%d,%d,%d,%d\nmaximized=%d\n", g_geom_x, g_geom_y, g_geom_w, g_geom_h, g_geom_maximized);
     fclose(f);
@@ -1285,6 +1290,21 @@ static void act_record(SDL_Window *win)
     SDL_SetWindowTitle(win, t);
 }
 
+/* v0.7.14: the update button - check, download, or restart (update.h); a
+ * restart would cut a recording short, so it waits for the recording */
+static void act_update(void)
+{
+    switch (upd_state()) {
+    case UPD_FOUND: upd_get(); break;
+    case UPD_READY:
+        if (rec_active()) { upd_note("Stop the recording first (R), then restart"); break; }
+        upd_restart();
+        break;
+    case UPD_ERROR: if (g_upd.failed_update) upd_get(); else upd_check(); break;
+    default: upd_check(); break;
+    }
+}
+
 static void act_hud(int mode)                 /* the stats overlay; -1 = the next level */
 {
     if (mode < 0) hud_cycle();
@@ -1607,6 +1627,7 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
     int said = 0;
     g_menu = 1;
     g_menu_state = MENU_WAITING;
+    if (g_open_settings) { ui_open(1); g_open_settings = 0; }
     for (int tick = 0;; tick++) {
         /* v0.5: the menu, redrawn often enough for the keys and the REC timer;
          * the bus is looked at every 250 ms as before */
@@ -2097,6 +2118,9 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--aspect-lock")) g_lock_aspect_cli = 1;
         else if (!strcmp(argv[i], "--chromeless")) g_chromeless_cli = 1;
         else if (!strcmp(argv[i], "--no-chromeless")) g_chromeless_cli = 0;
+        else if (!strcmp(argv[i], "--update-check")) { prefs_load(); return upd_cli(argv, 0); }   /* v0.7.14 */
+        else if (!strcmp(argv[i], "--settings")) g_open_settings = 1;   /* tests: the drawer open at start */
+        else if (!strcmp(argv[i], "--update")) { prefs_load(); return upd_cli(argv, 1); }
         else { fprintf(stderr, "unknown option %s (see the comment at the top of raw-view.c)\n", argv[i]); return 2; }
     }
     if (scale < 1) scale = 1;
@@ -2139,6 +2163,7 @@ int main(int argc, char **argv)
         SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         prefs_load();                      /* v0.7: USB or network, the last address; v0.7.11: before the renderer */
+        if (!headless && !file) upd_init(argv);   /* v0.7.14: where this viewer is, and (update_check) the start-up check */
         if (g_lock_aspect_cli >= 0) g_lock_aspect = g_lock_aspect_cli;
         up_pick_renderer();
         if (g_chromeless_cli >= 0) g_chromeless = g_chromeless_cli;
@@ -2154,6 +2179,10 @@ int main(int argc, char **argv)
         aspect_hook_window(win);
         win32_ensure_frame_styles(win);
         ren = win ? SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : NULL;
+        if (win && !ren) {                 /* v0.7.14: no GPU renderer (a VM, a broken driver): slower, but a picture */
+            fprintf(stderr, "SDL window: %s - drawing in software\n", SDL_GetError());
+            ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
+        }
         if (!ren) {
             fprintf(stderr, "SDL window: %s\n", SDL_GetError());
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Switch Frame Tap", SDL_GetError(), NULL);

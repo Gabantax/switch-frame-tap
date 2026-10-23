@@ -26,6 +26,8 @@ trap 'rm -rf "$tmp"' EXIT
 echo "switch-frame-tap PC-side checks"
 run "arm-file parser (whole tokens, numbers)" \
     bash -c "g++ -std=c++20 -Itier4/applet-mitm/source tier4/applet-mitm/test/armfile_test.cpp -o $tmp/armfile_test && $tmp/armfile_test"
+run "version order for the updaters (common/sft_version.h)" \
+    bash -c "gcc -std=c99 -Wall common/test/version_test.c -o $tmp/version_test && $tmp/version_test"
 run "early encode collection: pending, ready, once only, cancelled (PR #12)" \
     bash -c "g++ -std=c++20 -Itier4/applet-mitm/source tier4/applet-mitm/test/idlework_test.cpp -o $tmp/idlework_test && $tmp/idlework_test"
 run "screenshot PNG: de-swizzle + stored-deflate writer, checked with zlib" \

@@ -71,7 +71,7 @@ else
 fi
 
 echo "== compiling"
-"$ZIG" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 \
+"$ZIG" cc -target x86_64-windows-gnu -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 -DSFT_VERSION="\"$VER\"" \
     -I "$W/sdl2/x86_64-w64-mingw32/include" -I "$W/libusb/include" -I "$FF_INC" \
     "$REPO/tools/raw-recv/raw-view.c" "$B/raw-view.rc" \
     "$W/sdl2/x86_64-w64-mingw32/lib/libSDL2.dll.a" \

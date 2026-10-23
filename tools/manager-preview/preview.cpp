@@ -80,7 +80,11 @@ int main(int argc, char **argv) {
     Shot(app, surf, out, "06-beta", 4, true, 2);
     Shot(app, surf, out, "07-extras", 5, true, 2);
     Shot(app, surf, out, "08-setup", 6, true, 10);
-    Shot(app, surf, out, "09-about", 7, true, 0);
+    app.upd = App::Upd::Found;
+    app.upd_rel.tag = "v0.7.15";
+    Shot(app, surf, out, "09-updates", 7, true, 2);
+    Shot(app, surf, out, "09b-about", 8, true, 0);
+    Shot(app, surf, out, "01b-home-update", 0, false);
 
     /* waiting for the viewer, the toast */
     g_st.state = 2;

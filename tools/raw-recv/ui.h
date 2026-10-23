@@ -50,7 +50,7 @@ static void ui_open(int open);
 
 enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
        H_PIC, H_PIC_RESET, H_SOUND, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
-       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE };
+       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO };
 
 typedef struct { SDL_FRect r; int id, arg, window_space; } ui_hit_t;
 static ui_hit_t g_ui_hits[96];
@@ -663,6 +663,29 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
                 y += ui_d(24);
             }
         }
+        /* v0.7.14: updates from GitHub (update.h) */
+        ui_section(ren, cxi, &y, "UPDATES");
+        {
+            const float h = ui_d(48);
+            char sb[220];
+            const int us = upd_state();
+            const char *btn = us == UPD_FOUND ? "Update" : us == UPD_READY ? "Restart" : (us == UPD_ERROR && g_upd.failed_update) ? "Try again" : "Check";
+            const int can = us != UPD_CHECKING && us != UPD_GETTING && us != UPD_UNSUPPORTED;
+            ui_row(H_UPD, 0, y, h);
+            ui_label(ren, cxi, y, h, "Switch Frame Tap " SFT_VERSION, upd_status(sb, sizeof(sb)), ui_focused(H_UPD, 0), cwi);
+            ui_button(ren, xri, 0, y + ui_d(8), btn, us == UPD_FOUND || us == UPD_READY ? UI_ACC : UI_SURF3,
+                      us == UPD_FOUND || us == UPD_READY ? (SDL_Color){ 8, 20, 30, 255 } : UI_INK, H_UPD, 0, can);
+            y += h + ui_d(4);
+            ui_row(H_UPD_BETA, 0, y, h);
+            ui_label(ren, cxi, y, h, "Include betas", g_upd_betas ? "Offers test versions too" : "Only full releases", ui_focused(H_UPD_BETA, 0), cwi);
+            ui_toggle(ren, xri, y + ui_d(12), g_upd_betas, H_UPD_BETA, us != UPD_UNSUPPORTED);
+            y += h + ui_d(4);
+            ui_row(H_UPD_AUTO, 0, y, h);
+            ui_label(ren, cxi, y, h, "Check at start-up", "Looks for a new version when the viewer opens", ui_focused(H_UPD_AUTO, 0), cwi);
+            ui_toggle(ren, xri, y + ui_d(12), g_upd_check, H_UPD_AUTO, us != UPD_UNSUPPORTED);
+            y += h + ui_d(4);
+        }
+
         /* faint support line at the end of this column */
         {
             y += ui_d(18);
@@ -1023,6 +1046,24 @@ static void menu_draw(SDL_Renderer *ren)
         }
     }
 
+    /* v0.7.14: a newer viewer on GitHub (update.h) */
+    {
+        const int us = upd_state();
+        if (us == UPD_FOUND || us == UPD_GETTING || us == UPD_READY || (us == UPD_ERROR && g_upd.failed_update)) {
+            char lb[96];
+            if (us == UPD_FOUND) snprintf(lb, sizeof(lb), "Update to %s", g_upd.tag);
+            else if (us == UPD_GETTING) snprintf(lb, sizeof(lb), "Downloading %s...", g_upd.tag);
+            else if (us == UPD_READY) snprintf(lb, sizeof(lb), "Restart to use %s", g_upd.tag);
+            else snprintf(lb, sizeof(lb), "Update failed - try again");
+            y += ui_d(4);
+            ui_button(ren, -1, cx, y, lb, us == UPD_ERROR ? UI_SURF3 : UI_ACC, us == UPD_ERROR ? UI_WARN : (SDL_Color){ 8, 20, 30, 255 }, H_UPD, 0, us != UPD_GETTING);
+            y += ui_d(40);
+            if (us == UPD_ERROR) {
+                y += ui_wrap(ren, g_upd.msg, (int)cx, (int)y, ui_px(13), 0, UI_FAINT, (int)(pw - pad * 2), (int)ui_d(18));
+            }
+        }
+    }
+
     y += ui_d(12);
     {
         struct { const char *k, *what; } hints[] = {
@@ -1095,6 +1136,20 @@ static void menu_draw(SDL_Renderer *ren)
     g_ui_hit_window = 0;
     if (g_ui_open) ui_settings_popout(ren);
     else g_ui_d = 1.f;
+    /* tests: --shot with --seconds also saves the home screen (no picture came) */
+    {
+        static Uint32 t0 = 0;
+        if (!t0) t0 = SDL_GetTicks();
+        if (g_shot && g_run_secs > 0 && SDL_GetTicks() - t0 >= (Uint32)(g_run_secs * 1000.0)) {
+            SDL_Surface *sf = SDL_CreateRGBSurfaceWithFormat(0, ow, oh, 32, SDL_PIXELFORMAT_ARGB8888);
+            if (sf && SDL_RenderReadPixels(ren, NULL, SDL_PIXELFORMAT_ARGB8888, sf->pixels, sf->pitch) == 0) {
+                SDL_SaveBMP(sf, g_shot);
+                fprintf(stderr, "\nsaved the home screen %dx%d to %s\n", ow, oh, g_shot);
+            }
+            if (sf) SDL_FreeSurface(sf);
+            exit(0);
+        }
+    }
     SDL_RenderPresent(ren);
 }
 
@@ -1135,6 +1190,9 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
     }
     case H_SOUND: act_mute(!g_mute); break;
     case H_REC: if (d == 0) act_record(win); break;
+    case H_UPD: if (d == 0) act_update(); break;
+    case H_UPD_BETA: g_upd_betas = !g_upd_betas; prefs_save(); if (upd_state() == UPD_LATEST || upd_state() == UPD_FOUND) upd_check(); break;
+    case H_UPD_AUTO: g_upd_check = !g_upd_check; prefs_save(); break;
     default: break;
     }
 }
@@ -1232,6 +1290,9 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_SOUND: act_mute(!h->arg); break;
             case H_REC: act_record(win); break;
             case H_SUPPORT: SDL_OpenURL("https://buymeacoffee.com/papux200"); break;
+            case H_UPD: act_update(); break;
+            case H_UPD_BETA: g_upd_betas = !g_upd_betas; prefs_save(); if (upd_state() == UPD_LATEST || upd_state() == UPD_FOUND) upd_check(); break;
+            case H_UPD_AUTO: g_upd_check = !g_upd_check; prefs_save(); break;
             }
             return 1;
         }

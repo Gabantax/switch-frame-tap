@@ -105,7 +105,7 @@ cd "$HERE"
 SDL_CFLAGS=$("$SDL/bin/sdl2-config" --cflags)
 SDL_LIBS=$("$SDL/bin/sdl2-config" --static-libs)
 python3 "$HERE/gen_va_shim.py" "$OUT/va_shim.c" "$FF/lib/libavcodec.a" "$FF/lib/libavutil.a"
-gcc -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 -DSFT_VA_SHIM \
+gcc -O2 -Wall -Wextra -DSFT_H264 -DSFT_MP4 -DSFT_VA_SHIM -DSFT_VERSION="\"$VER\"" \
     -I"$FF/include" $SDL_CFLAGS $(pkg-config --cflags libusb-1.0) \
     -o "$OUT/switch-frame-tap-viewer" raw-view.c "$OUT/va_shim.c" \
     "$FF/lib/libavformat.a" "$FF/lib/libavcodec.a" "$FF/lib/libavutil.a" \

@@ -27,7 +27,12 @@ the viewer on your PC, start a game.
 - **USB or network**: a USB-C cable in handheld mode, Wi-Fi or LAN when docked.
 - **Game sound** included.
 - **Low latency**: about 45 ms (720p) to 60 ms (1080p) from the game to your PC.
-- **Viewers for Windows, Linux and macOS**, with one Settings panel for everything.
+- **Viewers for Windows, Linux, macOS and Android / Android TV**, with one Settings panel for everything.
+- **The HOME menu and the console's overlays** can stream too (opt-in): the
+  volume bar, the quick settings, the power menu and Tesla / Ultrahand menus
+  on top of the game.
+- **Updates from the apps**: the Switch app, the PC viewers and the Android
+  app check GitHub and update themselves.
 - **Record to MP4** with one key, and take **native-resolution screenshots**.
 - **Webcam mode**: the Switch shows up as a USB camera in OBS, Discord, Zoom
   or any camera app.
@@ -54,6 +59,8 @@ the viewer on your PC, start a game.
      [Zadig](https://zadig.akeo.ie/) ([how](#install)), then open `SwitchFrameTap.exe`.
    - **Linux:** unpack it and run the install script ([how](#install)).
    - **macOS:** unzip it, drag the app to Applications, right-click it and choose **Open**.
+   - **Android / Android TV:** install the `-android.apk` with a file manager
+     that can install apps, and set the Switch's Connection to **Network**.
 3. Plug the Switch into the PC (handheld) or pick **Network** in the viewer
    (press **Tab**), then start a game.
 
@@ -231,7 +238,8 @@ switch/.overlays/switch-frame-tap.ovl         the overlay (Tesla / Ultrahand)
 ```
 
 Reboot. The sysmodule starts about 30 seconds after boot, once the HOME menu
-is up. Updating later is the same: unzip over it; your settings are kept.
+is up. Updating later: the app's **Updates** page does it for you (or unzip a
+new release over it; your settings are kept either way).
 
 **2a. The PC viewer on Windows.** Unzip
 `switch-frame-tap-0.7.13-windows-viewer.zip` anywhere. Once, with the Switch
@@ -261,6 +269,12 @@ bash tools/raw-recv/install-launcher.sh
 (Intel) and drag **Switch Frame Tap.app** to Applications. It is not signed by
 Apple: the first time, right-click it and choose **Open**. No USB driver is
 needed. Thanks to proconsule54 and DiM3NT0R for the first macOS builds.
+
+**2d. Android and Android TV** (v0.7.14; Android 6 or newer - Android TV,
+Google TV, phones, tablets). Install `switch-frame-tap-<version>-android.apk`
+with a file manager that can install apps (Android asks once to allow it). It
+plays the stream over the network (set the Switch's Connection to Network) or
+USB, with sound. Made by didix16.
 
 On all of them, the viewer opens a window that says what it is waiting for (the
 Switch, its USB driver, or a game) and lists its keys; the same screen comes
@@ -353,20 +367,21 @@ Expect more heat and battery drain, and some games dislike fake docked mode
 
 | | |
 |---|---|
-| ![The manager app: status, streaming and connection](docs/app-manager-status.jpg) | ![The manager app: picture quality, keyframes, resolution and screenshots](docs/app-manager-settings.jpg) |
-| ![The manager app: the setup check](docs/app-manager-setup-check.jpg) | ![The overlay over Mario Kart 8 Deluxe: stream on/off, this app, handheld/docked](docs/app-overlay-mk8.jpg) |
+| ![The Switch app's Home page: the stream's state and frame rate, streaming on/off, start with the console](docs/app-home.jpg) | ![The Updates page: check for updates, install, include betas](docs/app-updates.jpg) |
+| ![An update being installed from the app](docs/app-update-installing.jpg) | ![The overlay over Mario Kart 8 Deluxe: stream on/off, this app, handheld/docked](docs/app-overlay-mk8.jpg) |
 
-*The manager app from the homebrew menu (status and connection, picture and
-screenshot settings, the setup check) and the overlay over a game - v0.7.0,
-captured on the console.*
+*The Switch app (v0.7.14): Home with the stream's state, the Updates page, an
+update being installed, and the overlay over a game - captured on the console.*
 
-**Switch Frame Tap** in the homebrew menu: what the stream is doing (and its
-frame rate), streaming on/off, start with the console, USB mode (PC viewer or
-webcam), picture quality
-(High/Medium/Low), keyframe interval, maximum resolution (1080p/720p), game
-audio on/off, sound in no-record games, start delay, screenshots, **Get
-extras** (below) and a setup check. Changes apply at once - a running stream
-restarts with them. Settings live in `sdmc:/config/switch-frame-tap/config.ini`.
+**Switch Frame Tap** in the homebrew menu, one page per topic in the sidebar
+(L and R change pages): **Home** (what the stream is doing and its frame rate,
+streaming on/off, start with the console), **Stream** (the connection - USB
+viewer, webcam or network - game audio, sound in no-record games, screen off),
+**Picture** (quality, keyframes, maximum resolution), **Screenshots**, **Beta**
+(the HOME menu and the overlays in the stream), **Extras** (below), **Setup**
+(the setup check, start delay), **Updates** (below) and **About**. Changes apply
+at once - a running stream restarts with them. Settings live in
+`sdmc:/config/switch-frame-tap/config.ini`.
 
 ### Get extras
 
@@ -382,12 +397,30 @@ corrupt the NAND or SD card, an update resets its settings, and with Hekate the
 boot entry needs `kip1=atmosphere/kips/hoc.kip` (the manager says when it is
 missing).
 
+### Updates
+
+**On the Switch:** the app's **Updates** page. **Check for updates** asks
+GitHub for the newest release, **Install the update** downloads its Switch zip
+and puts it on the SD card as a manual update would (the sysmodule, the memory
+helper, the overlay and the app; your settings are kept, and "Start with the
+console" stays as you set it). Restart the console to finish.
+
+**The viewers** (Windows, Linux, macOS, Android) look for a new version when
+they open and show **Update to vX** on their home screen; Settings has
+**Updates** with a Check button. One click downloads it, replaces the viewer's
+files and restarts it (Android asks you to confirm the install). Builds from
+source and the Flatpak update the way they were installed.
+
+**Include betas** (in each app) also offers test versions; off, only full
+releases.
+
 ### The overlay
 
 Needs an overlay menu (Tesla Menu or Ultrahand, on nx-ovlloader): stream
 on/off (remembered across reboots), live status, **Stream this app** (see
-below), **Enable sound in no-record games** (below), and Game default /
-Handheld (720p) / Docked (1080p) through ReverseNX-RT.
+below), **Enable sound in no-record games** (below), the two **Beta** switches
+(the HOME menu and the overlays in the stream, from the next restart), and Game
+default / Handheld (720p) / Docked (1080p) through ReverseNX-RT.
 
 ### Sound in games that block recording
 
@@ -826,8 +859,9 @@ dock works over the network since v0.7.0, with the quality adapting to the link.
 | Viewer: one-thread low-delay decode, vsync toggle, GPU upscaling (FSR 1, NIS, RTX VSR on Windows) | **done, on hardware** (v0.7.11) |
 | Hardware decode in the viewer (VAAPI/NVDEC on Linux, D3D11VA on Windows; VideoToolbox on macOS, off by default there) | **done, on hardware** (v0.7.12; Windows v0.7.13) |
 | USB 3.0 lossless (handheld) | parked: the link still trains to High Speed |
-| The HOME menu and the system screens (System Settings, the user picker, the homebrew menu from the Album) | **beta** (v0.7.14-beta1, opt-in: **HOME menu (beta)** in the manager; no sound there yet) |
-| System overlays (the volume bar, quick settings, the power menu) and Tesla/Ultrahand in the stream | **works on hardware**, coming as a beta (v0.7.14, opt-in: **Overlays (beta)** in the manager; copied 10-20 times a second, the power menu at half resolution) |
+| The HOME menu and the system screens (System Settings, the user picker, the Album, the homebrew menu) | **done, on hardware** (v0.7.14, opt-in: **Stream the HOME menu** on the Beta page; no sound there yet) |
+| System overlays (the volume bar, quick settings, the power menu) and Tesla/Ultrahand in the stream | **done, on hardware** (v0.7.14, opt-in: **Stream the overlays** on the Beta page; copied 10-20 times a second, the power menu at half resolution) |
+| Updates from the apps (the Switch app, the PC viewers, Android), betas optional | **done** (v0.7.14) |
 
 ## Layout
 

@@ -15,6 +15,10 @@
  *    console's recorder run for every game, so grc:d has their sound.
  *    v0.7.4: bundled, off; the toggle is common/sound_patch.hpp (shared with
  *    the manager). am reads its patches at boot: a change needs a restart.
+ *  - v0.7.14: the beta features (HOME menu, overlays in the stream) - config.ini
+ *    keys the sysmodule reads at boot, as the manager's rows; the status says
+ *    what this boot runs (reserved3 bits 4 and 5), so a change shows
+ *    "restart to apply" until it is.
  */
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
@@ -294,6 +298,32 @@ namespace {
                     r->drawString(l1, false, x + 15, y + 22, 16, r->a(m_patch_changed ? tsl::style::color::ColorHighlight : tsl::style::color::ColorDescription));
                 }), 36);
 
+                list->addItem(new tsl::elm::CategoryHeader("Beta (from the next restart)"));
+                {
+                    std::string v;
+                    tsl::hlp::doWithSDCardHandle([&] {
+                        m_cfg_home = sftini::Get("home_menu", &v) && v == "1";
+                        m_cfg_ovl = sftini::Get("overlays", &v) && v == "1";
+                    });
+                    auto *home = new tsl::elm::ToggleListItem("Stream the HOME menu", m_cfg_home);
+                    home->setStateChangedListener([this](bool on) {
+                        tsl::hlp::doWithSDCardHandle([&] { sftini::Set("home_menu", on ? "1" : "0"); });
+                        m_cfg_home = on;
+                    });
+                    list->addItem(home);
+                    auto *ovl = new tsl::elm::ToggleListItem("Stream the overlays", m_cfg_ovl);
+                    ovl->setStateChangedListener([this](bool on) {
+                        tsl::hlp::doWithSDCardHandle([&] { sftini::Set("overlays", on ? "1" : "0"); });
+                        m_cfg_ovl = on;
+                    });
+                    list->addItem(ovl);
+                }
+                list->addItem(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
+                    const bool pending = m_have && (((m_st.reserved3 & 16) != 0) != m_cfg_home || ((m_st.reserved3 & 32) != 0) != m_cfg_ovl);
+                    const char *l1 = pending ? "Restart the console to apply" : "Overlays: volume bar, quick settings, power menu, this menu";
+                    r->drawString(l1, false, x + 15, y + 22, 16, r->a(pending ? tsl::style::color::ColorHighlight : tsl::style::color::ColorDescription));
+                }), 36);
+
                 list->addItem(new tsl::elm::CategoryHeader("Display mode (ReverseNX-RT)"));
                 static const char *const names[] = { "", "Game default", "Handheld (720p)", "Docked (1080p)" };
                 for (int i = 1; i <= 3; ++i) {
@@ -356,6 +386,7 @@ namespace {
             tsl::elm::ToggleListItem *m_patch = nullptr;
             PatchState m_patch_state = PatchState::Missing;
             bool m_patch_changed = false;     /* toggled since the last restart (in this overlay session) */
+            bool m_cfg_home = false, m_cfg_ovl = false;   /* config.ini: what the next boot runs */
     };
 
     class FrameTapOverlay : public tsl::Overlay {

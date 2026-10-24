@@ -1898,6 +1898,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_queue_crop_c{0};
     constinit std::atomic<bool> g_viewer_key_request{false};
     constinit std::atomic<bool> g_viewer_can_ask{false};
+    constinit std::atomic<bool> g_viewer_crop{false};
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
     constinit PresentRec g_present_ring[PresentRingSize] = {};
@@ -7009,6 +7010,8 @@ namespace ams::mitm::applet {
                 g_strip_out = Lay().out;
                 dyn_out = 0;
                 dyn_center = false;
+                /* v0.7.16: a viewer that never said it draws crops (SFTC) gets them scaled here */
+                dyn_vic = g_uvc_mode || !g_viewer_crop.load(std::memory_order_relaxed);
                 if (!size_check_ok) { CropToPresent(g_strip_src); }
                 else { CropDynamic(g_strip_src, g_strip_out); }   /* v0.7.15 */
                 CropCentered(g_strip_src, g_strip_out);             /* v0.7.16 */
@@ -8212,6 +8215,7 @@ namespace ams::mitm::applet {
              * until the next stream's first frame is out. */
             if (end == StreamEnd::GameGone || end == StreamEnd::Reconfigure) { LogDefer(true); }
             LogLine("   nvstream: stopped: %s", why);
+            if (end == StreamEnd::ViewerGone) { g_viewer_crop.store(false, std::memory_order_relaxed); }   /* v0.7.16: the next viewer says again */
             if (s.center_frames != 0) {   /* v0.7.16 */
                 LogLine("   nvstream: a centred crop in %u frames (the viewer showed only the middle)", s.center_frames);
             }

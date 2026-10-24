@@ -1063,7 +1063,10 @@ static void key_request(void) { SDL_AtomicSet(&g_want_key, 1); }
 static void key_send_pending(void)
 {
     if (!SDL_AtomicCAS(&g_want_key, 1, 0)) return;
-    static const unsigned char msg[4] = { 'S', 'F', 'T', 'K' };
+    /* v0.7.16: + "SFTC" - this viewer draws crops itself (SFT_FLAG_CROP); a
+     * console only sends them to a viewer that said so. Older consoles read
+     * the first four bytes and ignore the rest. */
+    static const unsigned char msg[8] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'C' };
     if (g_sock != SOCK_BAD) { send(g_sock, (const char *)msg, sizeof(msg), 0); }
     else if (g_usb) { int n = 0; libusb_bulk_transfer(g_usb, SFT_EP_OUT, (unsigned char *)msg, sizeof(msg), &n, 20); }
 }

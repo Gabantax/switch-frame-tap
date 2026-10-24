@@ -154,6 +154,11 @@ namespace ams::mitm::applet {
      * frames on the network, and on request */
     extern std::atomic<bool> g_viewer_key_request;
     extern std::atomic<bool> g_viewer_can_ask;
+    /* v0.7.16: this viewer draws crops itself ("SFTC" with its SFTK) - header
+     * flags 32/64. Viewers that never said so (the Android app, viewers before
+     * v0.7.16) get the crop scaled on the console instead: an unknown flag
+     * made the Android app drop the connection. Cleared when the viewer goes. */
+    extern std::atomic<bool> g_viewer_crop;
     extern std::atomic<u64> g_queue_fence[4];
     /* M89: a seqlock over slot + fence: odd while the binder thread writes */
     extern std::atomic<u32> g_queue_seq;

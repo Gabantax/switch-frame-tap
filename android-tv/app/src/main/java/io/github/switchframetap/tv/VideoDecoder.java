@@ -73,13 +73,22 @@ final class VideoDecoder implements AutoCloseable {
                     if (codec != null) drain();
                     if (pending == null) pending = queue.poll(4);
                     if (pending == null) continue;
-                    if (pending != configuredPacket && (pending.discontinuity || codec == null
-                            || pending.width != width || pending.height != height)) {
+                    boolean resized = pending.width != width || pending.height != height;
+                    if (pending != configuredPacket && (pending.discontinuity || codec == null || resized)) {
                         if (!pending.key()) { pending = null; continue; }
-                        releaseCodec();
-                        if (pending.width != width || pending.height != height) failedCodecs.clear();
-                        width = pending.width; height = pending.height;
-                        configure(pending);
+                        if (codec != null && !resized) {
+                            // v0.7.15 (#27, #32): a gap or a queue reset - the keyframe restarts
+                            // the references, so the decoder is flushed and kept. Recreating it
+                            // took a TV long enough to overrun the queue again: one frame shown
+                            // per keyframe, ~1 fps at 60 fps (30 fps kept up).
+                            codec.flush(); stamps.clear();
+                            inputsSinceOutput = 0; lastOutputNs = System.nanoTime();
+                        } else {
+                            releaseCodec();
+                            if (resized) failedCodecs.clear();
+                            width = pending.width; height = pending.height;
+                            configure(pending);
+                        }
                         configuredPacket = pending;
                         inputWaitNs = System.nanoTime();
                     }

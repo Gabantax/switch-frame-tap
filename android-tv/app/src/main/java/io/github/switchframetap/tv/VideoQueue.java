@@ -11,6 +11,8 @@ final class VideoQueue {
     private long lastSequence = -1;
     private int width, height;
     private long resets, dropped;
+    // v0.7.15 (#27, #32): a reset asks the console for a keyframe at once
+    private boolean wantKey = true;   // and once at connect, as the PC viewer does
     synchronized void offer(SftProtocol.Packet p) {
         if (closed) return;
         boolean changed = width != p.width || height != p.height;
@@ -19,7 +21,7 @@ final class VideoQueue {
         lastSequence = p.sequence; width = p.width; height = p.height;
         boolean late = !queue.isEmpty() && p.receivedNs - queue.peekFirst().receivedNs > 100_000_000L;
         if (gap || changed || late || queue.size() >= 6 || bytes + p.data.length > 16 * 1024 * 1024) {
-            dropped += queue.size(); queue.clear(); bytes = 0; waitingKey = true; resets++;
+            dropped += queue.size(); queue.clear(); bytes = 0; waitingKey = true; resets++; wantKey = true;
         }
         if (waitingKey) {
             if (!p.key()) { dropped++; return; }
@@ -34,8 +36,10 @@ final class VideoQueue {
         return p;
     }
     synchronized void recover() {
-        dropped += queue.size(); queue.clear(); bytes = 0; waitingKey = true; resets++;
+        dropped += queue.size(); queue.clear(); bytes = 0; waitingKey = true; resets++; wantKey = true;
     }
+    /** True once after a reset: the receiver then asks the console for a keyframe. */
+    synchronized boolean takeKeyRequest() { boolean w = wantKey; wantKey = false; return w; }
     synchronized void close() { closed = true; queue.clear(); bytes = 0; notifyAll(); }
     synchronized long resets() { return resets; }
     synchronized long dropped() { return dropped; }

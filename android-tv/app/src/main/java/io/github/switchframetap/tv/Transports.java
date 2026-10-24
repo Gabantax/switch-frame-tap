@@ -28,6 +28,9 @@ final class Transports {
             try { return input.read(data, offset, length); }
             catch (SocketTimeoutException e) { return 0; }
         }
+        @Override public void requestKeyframe() {
+            try { socket.getOutputStream().write(SftProtocol.KEYFRAME_REQUEST); } catch (IOException ignored) { }
+        }
         @Override public void close() throws IOException { socket.close(); }
     }
     static UsbDevice find(UsbManager manager) {
@@ -41,6 +44,7 @@ final class Transports {
         private final UsbDeviceConnection connection;
         private final UsbInterface iface;
         private final UsbEndpoint endpoint;
+        private UsbEndpoint out;   // 0x01: the viewer's requests ("SFTK")
         private volatile boolean closed;
         Usb(UsbManager manager, UsbDevice device) throws IOException {
             this.manager = manager; deviceName = device.getDeviceName();
@@ -55,6 +59,8 @@ final class Transports {
                             && ep.getDirection() == UsbConstants.USB_DIR_IN) {
                         foundInterface = candidate; foundEndpoint = ep;
                     }
+                    if (ep.getAddress() == 0x01 && ep.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK
+                            && ep.getDirection() == UsbConstants.USB_DIR_OUT) out = ep;
                 }
             }
             if (foundEndpoint == null) throw new IOException("Select USB viewer on the Switch; webcam mode is not supported");
@@ -75,6 +81,10 @@ final class Transports {
                 return 0; // idle; the protocol parser enforces a deadline on partial packets
             }
             return n;
+        }
+        @Override public void requestKeyframe() {
+            UsbEndpoint ep = out;
+            if (!closed && ep != null) connection.bulkTransfer(ep, SftProtocol.KEYFRAME_REQUEST, SftProtocol.KEYFRAME_REQUEST.length, 20);
         }
         @Override public void close() {
             if (closed) return;

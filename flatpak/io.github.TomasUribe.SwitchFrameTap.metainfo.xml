@@ -45,6 +45,15 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.15" date="2026-10-24">
+      <description>
+        <ul>
+          <li>No latency spike every 3 seconds: the console writes nothing to its SD card while it streams.</li>
+          <li>The Album and System Settings stream again on firmware 23; the viewer says when the keyboard pauses the stream.</li>
+          <li>Native Wayland on KDE Plasma, and switch-frame-tap-viewer --check prints the session, drivers, udev rule, USB devices and network.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.14" date="2026-10-22">
       <description>
         <ul>

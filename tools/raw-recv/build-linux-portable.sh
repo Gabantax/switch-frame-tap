@@ -102,7 +102,10 @@ echo "== raw-view (portable)"
 OUT="$REPO/dist/build-linux-portable"
 rm -rf "$OUT"; mkdir -p "$OUT"
 cd "$HERE"
-SDL_CFLAGS=$("$SDL/bin/sdl2-config" --cflags)
+# v0.7.17: + include/ itself - raw-view.c includes <SDL2/SDL.h>, which only the
+# system's own SDL2 headers answered (an older SDL's headers over the 2.32 library;
+# a clean build host has none)
+SDL_CFLAGS="-I$SDL/include $("$SDL/bin/sdl2-config" --cflags)"
 SDL_LIBS=$("$SDL/bin/sdl2-config" --static-libs)
 LIBUSB_A="$(pkg-config --variable=libdir libusb-1.0)/libusb-1.0.a"
 [ -f "$LIBUSB_A" ] || { echo "no static libusb at $LIBUSB_A (install libusb-1.0-0-dev / libusb-devel)"; exit 1; }

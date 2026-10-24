@@ -251,6 +251,17 @@ namespace ams::mitm::applet {
                 const bool hb = g_vim_program.load(std::memory_order_relaxed) == g_app_tid.load(std::memory_order_relaxed);
                 const u64 wait = hb ? UINT64_C(3000000000) : UINT64_C(15000000000);
                 if (now - app_since < wait || (grc != 0 && now - grc < wait)) { continue; }
+                /* v0.7.16 review: homebrew only, and only while it draws. A retail
+                 * game has grc:d - it is silent there only while suspended behind
+                 * the HOME menu (the recorder opened then, recorded silence for a
+                 * minute and set Mario Kart's record volume from 0 to full;
+                 * logs/v0716-pr38test2) or when it blocks recording, which the
+                 * recorder hears as silence too. */
+                if (!hb || g_app_tid.load(std::memory_order_relaxed) == 0) { continue; }
+                {
+                    const u64 lp = g_app_present_tick.load(std::memory_order_relaxed);
+                    if (lp == 0 || now - armTicksToNs(lp) > UINT64_C(1000000000)) { continue; }
+                }
 
                 ::Service srv = {};
                 ::Event ev = {};

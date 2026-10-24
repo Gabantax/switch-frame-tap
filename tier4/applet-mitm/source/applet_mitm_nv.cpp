@@ -2017,7 +2017,9 @@ namespace ams::mitm::applet {
                         /* v0.7.17: not while a web applet's menu is over the game (WebMenuUp) */
                         if (WebMenuUp()) {
                             SetViewerReason(ViewerReason_AppletOpen);
-                            VicStage("vb:web_menu");
+                            /* v0.7.16 review: once - every 100 ms it wrote the log and last.txt (41 lines with the eShop open 6 s) */
+                            static const char *const WebMenuStage = "vb:web_menu";
+                            if (g_vic_stage.load(std::memory_order_relaxed) != WebMenuStage) { VicStage(WebMenuStage); }
                             os::SleepThread(TimeSpan::FromMilliSeconds(100));
                             continue;
                         }

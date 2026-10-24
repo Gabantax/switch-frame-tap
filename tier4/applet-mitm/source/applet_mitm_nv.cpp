@@ -1218,7 +1218,7 @@ namespace ams::mitm::applet {
         void TryNvencRealFrames(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
                                 u32 cmd_handle, u32 vsyncpt, u32 cfg_addr);
         /* M86: why a stream ended - live mode decides what to wait for next */
-        enum class StreamEnd { Done, GameGone, ViewerGone, EngineStall, Failed, Reconfigure, Disabled };
+        enum class StreamEnd { Done, GameGone, ViewerGone, EngineStall, Failed, Reconfigure, Disabled, Regrow };
         /* M99: attach, read one finished frame, write it as a PNG, detach */
         bool ShotStandalone();
         StreamEnd TryUvcRawStream(::ams::svc::Handle dbg, u64 slot_base, u32 vfd, u32 nvmap_fd,
@@ -1901,6 +1901,8 @@ namespace ams::mitm::applet {
     constinit std::atomic<bool> g_viewer_key_request{false};
     constinit std::atomic<bool> g_viewer_can_ask{false};
     constinit std::atomic<bool> g_viewer_crop{false};
+    /* v0.7.18: close the engines and set up again on the full donor (DonorCanGrow) */
+    constinit std::atomic<bool> g_donor_regrow{false};
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
     constinit PresentRec g_present_ring[PresentRingSize] = {};
@@ -3374,7 +3376,8 @@ namespace ams::mitm::applet {
             g_live_fps_x10.store(0, std::memory_order_relaxed);
             g_live_game_fps_x10.store(0, std::memory_order_relaxed);
             static const char *const names[] = { "done", "a game is on screen", "the viewer went away", "NVENC stalled", "failed",
-                                                 "restarting (new settings or a game's new buffers)", "turned off, or an applet needs the memory" };
+                                                 "restarting (new settings or a game's new buffers)", "turned off, or an applet needs the memory",
+                                                 "a 1080p picture - setting up again on the full memory loan" };
             LogLine("   live[%u]: HOME-menu session ended - %s; detached from vi", sessions, names[static_cast<int>(end)]);
             if (end == StreamEnd::Failed) { os::SleepThread(TimeSpan::FromSeconds(5)); }
             return true;
@@ -3473,6 +3476,15 @@ namespace ams::mitm::applet {
                 if (g_applet_needs_memory.load(std::memory_order_relaxed) && g_donor_mode) {
                     CaptureRelease("live");
                     if (g_ind_buf == nullptr && g_capture_handles == 0) { LogLine("   live: an applet needs the memory - closing the engines now"); return; }
+                }
+                /* v0.7.18: the full donor for a 1080p picture (DonorCanGrow) */
+                if (g_donor_regrow.load(std::memory_order_relaxed) && g_donor_mode) {
+                    CaptureRelease("live");
+                    if (g_ind_buf == nullptr && g_capture_handles == 0) {
+                        g_donor_regrow.store(false, std::memory_order_relaxed);
+                        LogLine("   live: setting up again on the full memory loan - closing the engines now");
+                        return;
+                    }
                 }
                 UsbFollowStreamSwitch();
                 /* M99: a screenshot while not streaming: attach just for it */
@@ -3663,14 +3675,15 @@ namespace ams::mitm::applet {
                 g_live_fps_x10.store(0, std::memory_order_relaxed);
                 g_live_game_fps_x10.store(0, std::memory_order_relaxed);
                 static const char *const names[] = { "done", "the game went away", "the viewer went away", "NVENC stalled", "failed",
-                                                     "the picture size changed - restarting at the new size", "turned off from the overlay" };
+                                                     "the picture size changed - restarting at the new size", "turned off from the overlay",
+                                                     "a 1080p picture - setting up again on the full memory loan" };
                 LogLine("   live[%u]: session ended - %s; detached", sessions, names[static_cast<int>(end)]);
                 if (end == StreamEnd::Failed) { os::SleepThread(TimeSpan::FromSeconds(5)); }
                 /* v0.7.14: with the HOME menu streaming, its session follows a
                  * game's at once - the 1 s pause was most of the 1.35 s the
                  * viewer stood still when a game was quit (ovl3d) */
                 else if (end == StreamEnd::GameGone && g_ui_stream_armed) { os::SleepThread(TimeSpan::FromMilliSeconds(300)); }
-                else if (end != StreamEnd::Reconfigure && end != StreamEnd::Disabled) { os::SleepThread(TimeSpan::FromSeconds(1)); }
+                else if (end != StreamEnd::Reconfigure && end != StreamEnd::Disabled && end != StreamEnd::Regrow) { os::SleepThread(TimeSpan::FromSeconds(1)); }
                 else if (end == StreamEnd::Reconfigure) {
                     os::SleepThread(TimeSpan::FromMilliSeconds(300));   /* a new buffer set registers slot by slot */
                     SettleAfterRebuild();
@@ -7677,6 +7690,16 @@ namespace ams::mitm::applet {
              * same bitrate, and cost fps and a frame of latency (Run v0713-smo2) */
             const bool full1080 = uvc ? (uvc_w == 1920 && fits1080)
                                       : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080);
+            /* v0.7.18: a 1080p picture on a donor taken smaller beside the Album or
+             * System Settings, with the room back: one more setup on the full one
+             * (about a second) rather than the whole session at 720p */
+            {
+                const bool want1080 = uvc ? uvc_w == 1920 : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed);
+                if (live && want1080 && !fits1080 && g_donor_mode && DonorCanGrow()) {
+                    g_donor_regrow.store(true, std::memory_order_relaxed);
+                    return StreamEnd::Regrow;
+                }
+            }
             if (uvc && uvc_w == 1920 && !fits1080) { LogLine("   nvstream: webcam asked for 1080p but the capture region is too small - sending 720p"); }
             u32 uvc_drops = uvc ? UvcDroppedCount() : 0;
             s.lay = full1080 ? std::addressof(Layout1080()) : nullptr;

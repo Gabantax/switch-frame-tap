@@ -1,6 +1,7 @@
 #include "applet_mitm_donor.hpp"
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
+#include "applet_mitm_shot.hpp"
 #include "applet_mitm_service.hpp"
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_uisource.hpp"
@@ -493,6 +494,45 @@ namespace ams::mitm::applet {
     }
 
     bool KeyboardHoldsStream() { return !WebAppletRunning() && Running(0x0100000000001008ull); }
+
+    bool HomeDetachShouldFire(u64 stall_age_ms, u32 probe_ms, u32 fallback_ms, const char **out_reason) {
+        if (probe_ms < 50) { probe_ms = 50; }
+        if (fallback_ms < probe_ms) { fallback_ms = probe_ms; }
+
+        /* Explicit HOME button (hid shm) - snappy path. Need a tiny present
+         * gap so we do not tear down mid-frame; loads never press HOME. */
+        if (HomeButtonRecent(3000) && stall_age_ms >= 50) {
+            if (out_reason != nullptr) { *out_reason = "HOME button"; }
+            return true;
+        }
+
+        if (stall_age_ms < probe_ms) { return false; }
+
+        if (g_applet_needs_memory.load(std::memory_order_relaxed)) {
+            if (out_reason != nullptr) { *out_reason = "applet needs memory"; }
+            return true;
+        }
+        if (AppletHoldActive()) {
+            if (out_reason != nullptr) { *out_reason = "applet hold active"; }
+            return true;
+        }
+        u64 mb = 0;
+        if (AppletBusy(std::addressof(mb))) {
+            if (out_reason != nullptr) { *out_reason = "applet pool busy"; }
+            return true;
+        }
+        /* Stock Album / SwitchU replace qlaunch as 010000000000100D (HBL too). */
+        if (Running(0x010000000000100Dull)) {
+            if (out_reason != nullptr) { *out_reason = "Album/SwitchU 100D up"; }
+            return true;
+        }
+        /* Stock HOME with no Album yet / HOME shm dead: wait out load gaps */
+        if (stall_age_ms >= fallback_ms) {
+            if (out_reason != nullptr) { *out_reason = "present stall fallback"; }
+            return true;
+        }
+        return false;
+    }
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
         g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);   /* its heap comes before the map */

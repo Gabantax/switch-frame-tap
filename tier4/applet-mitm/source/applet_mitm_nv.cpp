@@ -3396,6 +3396,7 @@ namespace ams::mitm::applet {
             u64 t_gen = now;
             for (;;) {
                 os::SleepThread(TimeSpan::FromMilliSeconds(100));
+                ViewerKeepAlive();   /* v0.7.17: the viewer hears from us meanwhile */
                 const u64 t = armTicksToNs(armGetSystemTick());
                 if (g_app_pid.load(std::memory_order_relaxed) != pid) { return; }   /* the game went away */
                 if (g_game_surface.generation != gen) { gen = g_game_surface.generation; t_gen = t; }

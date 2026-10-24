@@ -95,6 +95,8 @@ namespace ams::mitm::applet {
      * `timeout_ms` for it to be taken. A cable with no viewer open stays
      * Configured, so UsbReady alone cannot tell. */
     bool UsbViewerPresent(u32 timeout_ms);
+    /* v0.7.17: something every second while the stream waits between sessions */
+    void ViewerKeepAlive();
     /* v0.7.10: why the viewer gets no picture, sent to it after each idle
      * probe that finds it (a status packet old viewers ignore) - 0 while
      * streaming */

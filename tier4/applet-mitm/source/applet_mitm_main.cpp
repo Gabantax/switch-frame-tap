@@ -1132,7 +1132,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.17-test1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.17-test2: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1504,10 +1504,16 @@ namespace ams::mitm::applet {
              * second - the viewer says why there is no picture, and the silence
              * after a game stops drawing no longer looks like a dead connection
              * (the viewer reconnects after 5 s without data, PR #23) */
-            if (const u32 r = g_viewer_reason.load(std::memory_order_relaxed); r != ViewerReason_None) {
-                static u64 s_status_ns = 0;
-                const u64 now = armTicksToNs(armGetSystemTick());
-                if (now - s_status_ns >= UINT64_C(1000000000)) { s_status_ns = now; UsbSendStatus(r, true); }
+            static u64 s_status_ns = 0;
+            const u64 now = armTicksToNs(armGetSystemTick());
+            if (now - s_status_ns >= UINT64_C(1000000000)) {
+                s_status_ns = now;
+                if (const u32 r = g_viewer_reason.load(std::memory_order_relaxed); r != ViewerReason_None) { UsbSendStatus(r, true); }
+                else {
+                    /* nothing to say: an empty header, which every viewer skips */
+                    static constexpr u32 Hello[8] = { 0x52544653u, 2u, 0, 0, 0, 0, 0, 0 };
+                    static_cast<void>(NetSendBuffer(Hello, sizeof(Hello)));
+                }
             }
             return true;
         }
@@ -1538,6 +1544,19 @@ namespace ams::mitm::applet {
         if (transferred != sizeof(h)) { return false; }
         if (const u32 r = g_viewer_reason.load(std::memory_order_relaxed); r != ViewerReason_None) { UsbSendStatus(r); }
         return true;
+    }
+
+    /* v0.7.17: between two sessions (a game rebuilding its buffers, up to ~8 s)
+     * the stream sends nothing; viewers with PR #23 take 5 s without data as a
+     * dead connection and reconnected each time (logs/v0717-test1). About once
+     * a second: the USB probe's empty header, or the network status. */
+    void ViewerKeepAlive() {
+        if (g_uvc_mode) { return; }
+        static u64 s_ns = 0;
+        const u64 now = armTicksToNs(armGetSystemTick());
+        if (now - s_ns < UINT64_C(1000000000)) { return; }
+        s_ns = now;
+        static_cast<void>(UsbViewerPresent(100));
     }
 
     bool UsbReady() {

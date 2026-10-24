@@ -110,6 +110,8 @@ namespace ams::mitm::applet {
         ViewerReason_NoMemory    = 8,
         ViewerReason_NotFound    = 9,
         ViewerReason_Starting    = 10,
+        /* v0.7.15: the keyboard beside System Settings (no room for a donor) */
+        ViewerReason_Keyboard    = 11,
     };
     void SetViewerReason(ViewerReason r);
     /* v0.7.11: USB follows the stream switch (VIC worker thread only) */

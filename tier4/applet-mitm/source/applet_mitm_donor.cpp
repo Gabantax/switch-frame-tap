@@ -166,7 +166,7 @@ namespace ams::mitm::applet {
          * (an applet it opens) stops the stream before it asks for memory -
          * it shows in the process list while its code still loads */
         constinit u64 g_beside_max_pid = 0;   /* 0: no baseline (not beside a big applet) */
-        bool NewProcessBeside(u64 donor_pid) {
+        bool NewProcessBeside(u64 donor_pid, u64 *out_pid) {
             u64 &s_max_pid = g_beside_max_pid;
             u64 pids[96];
             s32 n = 0;
@@ -175,7 +175,16 @@ namespace ams::mitm::applet {
             for (s32 i = 0; i < n; ++i) { if (pids[i] != donor_pid && pids[i] > top) { top = pids[i]; } }
             const bool fresh = s_max_pid != 0 && top > s_max_pid;
             s_max_pid = top;
+            *out_pid = top;
             return fresh;
+        }
+        u64 ProgramIdOf(u64 pid) {
+            os::NativeHandle h = os::InvalidNativeHandle;
+            ncm::ProgramLocation loc = {};
+            cfg::OverrideStatus st = {};
+            if (R_FAILED(::ams::pm::dmnt::AtmosphereGetProcessInfo(std::addressof(h), std::addressof(loc), std::addressof(st), os::ProcessId{pid}))) { return 0; }
+            os::CloseNativeHandle(h);
+            return loc.program_id.value;
         }
         u64 AppletFreeMb() {
             u64 cur = 0, lim = 0;
@@ -290,7 +299,8 @@ namespace ams::mitm::applet {
                 const Beside &beside = free_mb < TightMb ? BesideNow(free_mb) : BesideOther;
                 const bool tight = free_mb < beside.stop_mb;
                 if (beside.what == nullptr) { g_beside_max_pid = 0; }
-                const bool spawned = beside.what != nullptr && NewProcessBeside(g_pid);
+                u64 new_pid = 0;
+                const bool spawned = beside.what != nullptr && NewProcessBeside(g_pid, std::addressof(new_pid));
                 bool web = false;
                 if (mb >= checked_mb + 32 || tight) { checked_mb = mb; web = WebAppletRunning(); }
                 const bool trigger = web || tight || spawned;
@@ -301,6 +311,7 @@ namespace ams::mitm::applet {
                     LogLine("donor: an applet is starting (Applet group %llu MB, %llu of them ours%s%s) - stopping the stream to give the memory back",
                             static_cast<unsigned long long>(mb), static_cast<unsigned long long>(donor_mb),
                             spawned ? "; a new process beside " : "", spawned ? beside.what : "");
+                    if (spawned) { LogLine("donor: the new process: pid %llu, program %016llx", static_cast<unsigned long long>(new_pid), static_cast<unsigned long long>(ProgramIdOf(new_pid))); }
                 }
             }
         }
@@ -388,6 +399,8 @@ namespace ams::mitm::applet {
         const u64 free_mb = (lim >> 20) - mb;
         return WebAppletRunning() || free_mb < MinDonorMb + BesideNow(free_mb).take_mb;
     }
+
+    bool KeyboardHoldsStream() { return !WebAppletRunning() && Running(0x0100000000001008ull); }
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
         std::scoped_lock lk(g_lock);

@@ -45,6 +45,15 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.17" date="2026-10-24">
+      <description>
+        <ul>
+          <li>A pin button keeps the window on top of others.</li>
+          <li>Over the network the viewer reconnects by itself after the Switch restarts or changes network, and waits calmly when another viewer already has the Switch.</li>
+          <li>Network viewers say why there is no picture, as USB viewers already did.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.16" date="2026-10-24">
       <description>
         <ul>

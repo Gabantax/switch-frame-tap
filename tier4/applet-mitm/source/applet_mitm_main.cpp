@@ -1132,7 +1132,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.16: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.17-test1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1425,7 +1425,7 @@ namespace ams::mitm::applet {
          * and 0 channels - viewers before v0.7.10 drop audio that is not
          * 48 kHz stereo - then the reason and two lines of text, each its own
          * transfer as the video's header and payload are. */
-        void UsbSendStatus(u32 reason) {
+        void UsbSendStatus(u32 reason, bool net = false) {
             struct Status { u32 version; u32 reason; char head[64]; char detail[120]; };
             static_assert(sizeof(Status) == 192);
             static const char *const text[][2] = {
@@ -1453,6 +1453,10 @@ namespace ams::mitm::applet {
             std::snprintf(st.head, sizeof(st.head), "%s", text[reason][0]);
             std::snprintf(st.detail, sizeof(st.detail), "%s", text[reason][1]);
             std::memcpy(body_buf, std::addressof(st), sizeof(st));
+            if (net) {   /* v0.7.17: a network viewer (one thread sends - this one) */
+                if (NetSendBuffer(hdr_buf, sizeof(h))) { static_cast<void>(NetSendBuffer(body_buf, sizeof(st))); }
+                return;
+            }
             if (UsbPostWait(hdr_buf, sizeof(h), 300)) { static_cast<void>(UsbPostWait(body_buf, sizeof(st), 300)); }
         }
     }
@@ -1495,7 +1499,18 @@ namespace ams::mitm::applet {
 
     bool UsbViewerPresent(u32 timeout_ms) {
         /* v0.7: a viewer connected over the network counts, and goes first */
-        if (NetClientPresent()) { return true; }
+        if (NetClientPresent()) {
+            /* v0.7.17: the status goes over the network too, about once a
+             * second - the viewer says why there is no picture, and the silence
+             * after a game stops drawing no longer looks like a dead connection
+             * (the viewer reconnects after 5 s without data, PR #23) */
+            if (const u32 r = g_viewer_reason.load(std::memory_order_relaxed); r != ViewerReason_None) {
+                static u64 s_status_ns = 0;
+                const u64 now = armTicksToNs(armGetSystemTick());
+                if (now - s_status_ns >= UINT64_C(1000000000)) { s_status_ns = now; UsbSendStatus(r, true); }
+            }
+            return true;
+        }
         if (!UsbReady()) { return false; }
         /* v0.4: a webcam's "viewer" is a host that committed a stream */
         if (g_uvc_mode) {

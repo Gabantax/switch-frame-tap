@@ -11,6 +11,7 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.media.AudioAttributes;
@@ -23,6 +24,7 @@ import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.PixelCopy;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -34,6 +36,8 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
+import java.io.IOException;
 import java.util.Locale;
 
 import static io.github.switchframetap.tv.Ui.dp;
@@ -53,6 +57,12 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private EditText ip;
     private Button action, settingsButton, homeUsb, homeNet, drawerUsb, drawerNet;
     private Ui.Toggle muteToggle, stableToggle, statsToggle;
+    private Ui.Toggle recordToggle;               // v0.7.16: screenshots and recordings (Capture, Recorder)
+    private TextView recBadge;
+    private Recorder recorder;
+    private boolean recordStopping;
+    private Runnable afterPermission;
+    private static final int STORAGE_REQUEST = 7;
     private Updater updater;                       // v0.7.14: updates from GitHub
     private Button updateButton, updateAction;
     private TextView updateStatus;
@@ -112,6 +122,12 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         hl.setMargins(dp(10), dp(10), 0, 0);
         root.addView(hud, hl);
+        recBadge = Ui.text(this, "", 13, Ui.INK, true);
+        recBadge.setPadding(dp(12), dp(6), dp(12), dp(6));
+        recBadge.setBackground(Ui.round(0xCCB91C1C, 14)); recBadge.setVisibility(View.GONE);
+        FrameLayout.LayoutParams rl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        rl.setMargins(0, dp(10), dp(10), 0);
+        root.addView(recBadge, rl);
         updater = new Updater(this, this::updateUpdater);
         buildHome();
         buildDrawer();
@@ -247,6 +263,10 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         body.setPadding(dp(14), dp(6), dp(14), dp(16));
         scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
 
+        section(body, "CAPTURE");
+        actionRow(body, "Screenshot", "A PNG in Pictures/" + Capture.FOLDER + (tv ? " · P key" : ""), v -> { closeDrawer(); handler.postDelayed(this::screenshot, 250); });
+        recordToggle = switchRow(body, "Record", "An MP4 with sound in Movies/" + Capture.FOLDER + (tv ? " · R or Record key" : ""), v -> toggleRecording());
+
         section(body, "CONNECTION");
         LinearLayout conn = new LinearLayout(this); conn.setGravity(Gravity.CENTER_VERTICAL);
         conn.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -354,6 +374,109 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         body.addView(row);
         return toggle;
     }
+    /** A row that does something when chosen. */
+    private void actionRow(LinearLayout body, String label, String sub, View.OnClickListener click) {
+        LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        row.setFocusable(true); row.setClickable(true); row.setBackground(Ui.rowBackground());
+        row.addView(Ui.text(this, label, 16, Ui.INK, false));
+        TextView s = Ui.text(this, sub, 13, Ui.DIM, false); s.setPadding(0, dp(5), 0, 0);
+        row.addView(s);
+        row.setOnClickListener(click);
+        body.addView(row);
+    }
+    /** A switch whose state the app sets (recording can also stop by itself). */
+    private Ui.Toggle switchRow(LinearLayout body, String label, String sub, View.OnClickListener click) {
+        LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        row.setFocusable(true); row.setClickable(true); row.setBackground(Ui.rowBackground());
+        LinearLayout texts = new LinearLayout(this); texts.setOrientation(LinearLayout.VERTICAL);
+        texts.addView(Ui.text(this, label, 16, Ui.INK, false));
+        TextView s = Ui.text(this, sub, 13, Ui.DIM, false); s.setPadding(0, dp(5), 0, 0);
+        texts.addView(s);
+        row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
+        Ui.Toggle toggle = new Ui.Toggle(this);
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(dp(44), dp(24)); tl.leftMargin = dp(16);
+        row.addView(toggle, tl);
+        row.setOnClickListener(click);
+        body.addView(row);
+        return toggle;
+    }
+
+    /* ---- v0.7.16: screenshots and recordings -------------------------------- */
+
+    private void toast(String text) { Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
+    /** Android 9 and older: the storage permission first, then the action. */
+    private boolean storageReady(Runnable action) {
+        if (!Capture.needsPermission()
+                || checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) return true;
+        afterPermission = action;
+        requestPermissions(new String[]{ android.Manifest.permission.WRITE_EXTERNAL_STORAGE }, STORAGE_REQUEST);
+        return false;
+    }
+    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(code, permissions, results);
+        if (code != STORAGE_REQUEST) return;
+        Runnable action = afterPermission; afterPermission = null;
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) { if (action != null) action.run(); }
+        else toast("Allow storage access to save screenshots and recordings.");
+    }
+    private void screenshot() {
+        if (engine == null || !showingVideo) { toast("No picture to save yet - start a game on the Switch."); return; }
+        if (Build.VERSION.SDK_INT < 24) { toast("Screenshots need Android 7 or newer."); return; }
+        if (!storageReady(this::screenshot)) return;
+        copyPicture();
+    }
+    @android.annotation.TargetApi(24)   // PixelCopy; screenshot() checks the version
+    private void copyPicture() {
+        if (Build.VERSION.SDK_INT < 24 || engine == null) return;
+        int w = engine.stats.width, h = engine.stats.height;
+        if (w < 16 || h < 16) return;
+        final Bitmap bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        try {
+            PixelCopy.request(picture, bitmap, result -> {
+                if (result != PixelCopy.SUCCESS) { bitmap.recycle(); toast("The screenshot failed (the picture could not be copied)."); return; }
+                new Thread(() -> {
+                    String text;
+                    try { text = "Screenshot saved to " + Capture.savePng(getApplicationContext(), bitmap); }
+                    catch (IOException | RuntimeException e) { text = "The screenshot failed: " + e.getMessage(); }
+                    bitmap.recycle();
+                    final String shown = text;
+                    handler.post(() -> toast(shown));
+                }, "sft-screenshot").start();
+            }, handler);
+        } catch (IllegalArgumentException e) { bitmap.recycle(); toast("The screenshot failed: " + e.getMessage()); }
+    }
+    private void toggleRecording() {
+        if (recorder != null) {
+            if (engine != null) engine.stopRecording(); else recorder.stop();
+            recordStopping = true; updateRecording();
+            return;
+        }
+        if (engine == null || !showingVideo) { toast("Nothing to record yet - start a game on the Switch."); updateRecording(); return; }
+        if (!storageReady(this::toggleRecording)) return;
+        final Recorder r;
+        try {
+            r = new Recorder(Capture.newVideo(getApplicationContext()), (done, saved, text) -> handler.post(() -> {
+                if (recorder == done) { recorder = null; recordStopping = false; }
+                updateRecording();
+                toast(text);
+            }));
+        } catch (IOException | RuntimeException e) { toast("Could not start recording: " + e.getMessage()); return; }
+        recorder = r; r.start(); engine.record(r);
+        updateRecording();
+    }
+    private void updateRecording() {
+        boolean on = recorder != null;
+        if (recordToggle != null) recordToggle.set(on);
+        recBadge.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (on && recordStopping) recBadge.setText("Saving…");
+        else if (on) {
+            long s = (System.nanoTime() - recorder.startedNs) / 1_000_000_000L;
+            recBadge.setText(String.format(Locale.ROOT, "● REC %d:%02d", s / 60, s % 60));
+        }
+    }
+
     /* ---- v0.7.14: updates (Updater.java) ---- */
     private void updateClicked() {
         switch (updater.state) {
@@ -557,6 +680,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
                     sampledReceived = s.received; sampledDecoded = s.decoded; sampledAudio = s.audioBytes;
                 }
                 hud.setVisibility(stats ? View.VISIBLE : View.GONE);
+                if (recorder != null) updateRecording();
                 if (!active) updateHome();   // a console status ages out after 4 s
             }
             handler.postDelayed(this, 250);
@@ -576,6 +700,11 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     /* ---- keys and lifecycle ------------------------------------------------- */
 
     @Override public boolean onKeyDown(int code, KeyEvent event) {
+        if (event.getRepeatCount() == 0 && !drawerOpen() && showingVideo) {
+            // v0.7.16: a keyboard or a remote with a record key
+            if (code == KeyEvent.KEYCODE_MEDIA_RECORD || code == KeyEvent.KEYCODE_R) { toggleRecording(); return true; }
+            if (code == KeyEvent.KEYCODE_P || code == KeyEvent.KEYCODE_SYSRQ) { screenshot(); return true; }
+        }
         if (event.getRepeatCount() == 0 && !drawerOpen()) {
             boolean open = code == KeyEvent.KEYCODE_MENU || code == KeyEvent.KEYCODE_SETTINGS
                     || (showingVideo && (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER

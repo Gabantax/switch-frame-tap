@@ -75,6 +75,15 @@ public final class ProtocolTest {
         invalid(wire(8,48000,2,0,new byte[3]), "unaligned PCM");
         invalid(wire(2,4096,720,0,nal), "invalid dimensions");
         invalid(wire(10,1280,720,0,nal), "audio/video flag collision");
+        // v0.7.16 consoles: a crop (32) and a centred crop (64) ride on video frames only
+        SftProtocol.Packet cropped = SftProtocol.readPacket(new Chunks(wire(2 | 4 | 32 | 64, 1920, 1080, 5, nal)), () -> false);
+        check(cropped.key() && Arrays.equals(cropped.data, nal), "cropped video frames accepted");
+        invalid(wire(8 | 32, 48000, 2, 0, audio), "a crop on audio");
+        invalid(wire(2 | 128, 1280, 720, 0, nal), "unknown flags still rejected");
+        // v0.7.16 recordings: an MP4 sample is the picture NAL units only
+        byte[] picOnly = SftProtocol.pictureNals(new byte[]{0,0,0,1,0x09,0x10, 0,0,0,1,0x67,0x64,0, 0,0,1,0x68,0x12, 0,0,1,0x06,5,5, 0,0,1,0x65,9,8, 0,0,0,1,0x41,7});
+        check(Arrays.equals(picOnly, new byte[]{0,0,0,1,0x65,9,8, 0,0,0,1,0x41,7}), "AUD, SPS, PPS and SEI left out of a sample");
+        check(SftProtocol.pictureNals(new byte[]{0,0,1,0x67,1,2}).length == 0, "no picture NAL unit");
         try { SftProtocol.parameterSets(new byte[]{0,0,1,0x65,1}); throw new AssertionError("missing SPS"); }
         catch (IOException expected) { checks++; }
         try { SftProtocol.readPacket(new Chunks(new byte[0]), () -> true); throw new AssertionError("cancellation"); }

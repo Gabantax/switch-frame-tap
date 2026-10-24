@@ -8,6 +8,12 @@ import java.util.Arrays;
 /** SFTR v2, not the unrelated sw_hdr_t protocol under switch-stream/. */
 final class SftProtocol {
     static final int VIDEO = 2, KEY = 4, AUDIO = 8, STATUS = 16;
+    /** v0.7.16 consoles: the part of a video frame the game drew (in the header's
+     *  block_h_log2) and whether it sits in the middle. A console sends them only
+     *  to a viewer that says it draws them ("SFTC"); this app does not, so the
+     *  console scales such frames itself. Accepted anyway, so a frame meant for
+     *  another viewer never drops the connection. */
+    static final int CROP = 32, CROP_MID = 64;
     static final int MAX_VIDEO = 8 * 1024 * 1024, MAX_AUDIO = 65536, MAX_STATUS = 4096;
     interface Stop { boolean stopped(); }
     interface Source extends AutoCloseable {
@@ -52,7 +58,7 @@ final class SftProtocol {
             if (flags == 0 && n == 0) continue;
             break;
         }
-        if ((flags & ~(VIDEO | KEY | AUDIO | STATUS)) != 0) throw new IOException("Unsupported stream format");
+        if ((flags & ~(VIDEO | KEY | AUDIO | STATUS | CROP | CROP_MID)) != 0) throw new IOException("Unsupported stream format");
         if ((flags & STATUS) != 0) {
             // Audio + status, rate 0: why there is no picture. Older viewers drop it as audio.
             if (flags != (AUDIO | STATUS) || n < 8 || n > MAX_STATUS) throw new IOException("Invalid status packet");
@@ -112,6 +118,23 @@ final class SftProtocol {
         }
         if (sps == null || pps == null) throw new IOException("The keyframe does not contain SPS/PPS");
         return new byte[][] {sps, pps};
+    }
+    /** v0.7.16: a frame for an MP4 sample - its picture NAL units only. SPS and
+     *  PPS go in the track's format (parameterSets), and Android's muxer splits
+     *  NAL units only near the start of a sample, so nothing else may lead. */
+    static byte[] pictureNals(byte[] data) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(data.length);
+        for (int i = 0; i < data.length - 3;) {
+            int prefix = prefix(data, i);
+            if (prefix == 0) { i++; continue; }
+            int nal = i + prefix, end = nal + 1;
+            if (nal >= data.length) break;
+            while (end < data.length && prefix(data, end) == 0) end++;
+            int type = data[nal] & 31;
+            if (type >= 1 && type <= 5) { out.write(0); out.write(0); out.write(0); out.write(1); out.write(data, nal, end - nal); }
+            i = end;
+        }
+        return out.toByteArray();
     }
     private static int prefix(byte[] b, int i) {
         if (i+2 >= b.length || b[i] != 0 || b[i+1] != 0) return 0;

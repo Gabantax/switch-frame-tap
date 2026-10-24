@@ -37,6 +37,8 @@ final class StreamEngine {
     private volatile DatagramSocket discovery;
     private volatile AudioPump audio;
     private volatile VideoDecoder decoder;
+    private volatile Recorder recorder;      // v0.7.16: recording to an MP4
+    private volatile boolean keyWanted;       // ... which starts at a keyframe asked for now
     private final Thread thread;
     StreamEngine(Context context, Surface surface, boolean usb, String address, String lastAddress,
                  boolean stableAudio, boolean muted, Listener listener) {
@@ -48,7 +50,12 @@ final class StreamEngine {
     }
     void start() { thread.start(); }
     void mute(boolean value) { muted = value; AudioPump a = audio; if (a != null) a.mute(value); }
+    /** v0.7.16: every packet from now on also goes to this recording. */
+    void record(Recorder r) { recorder = r; keyWanted = true; }
+    /** Ends the recording (it finishes the file on its own thread). */
+    void stopRecording() { Recorder r = recorder; recorder = null; if (r != null) r.stop(); }
     void stop() {
+        stopRecording();
         stopped = true; thread.interrupt();
         VideoDecoder v = decoder; if (v != null) v.requestStop();
         AudioPump a = audio; if (a != null) a.requestStop();
@@ -77,8 +84,11 @@ final class StreamEngine {
                     status("Connected. Open a game on the Switch…");
                     long keyAskedNs = 0;
                     while (!stopped) {
+                        if (keyWanted) { keyWanted = false; connected.requestKeyframe(); keyAskedNs = System.nanoTime(); }
                         SftProtocol.Packet packet = SftProtocol.readPacket(connected, () -> stopped);
                         stats.bytes += packet.data.length + 32;
+                        Recorder r = recorder;
+                        if (r != null && !packet.status()) r.offer(packet);
                         if (packet.status()) {
                             if (!stopped) listener.consoleStatus(packet.statusReason(), packet.statusHead(), packet.statusDetail());
                         }
@@ -103,6 +113,7 @@ final class StreamEngine {
                         status(e.getMessage() + ". Reconnecting…");
                     }
                 } finally {
+                    stopRecording();   // a new connection is a new stream: the file ends here
                     closeSource(); source = null;
                     // Cleanup must finish even when stop() interrupted the receiver.
                     Thread.interrupted();

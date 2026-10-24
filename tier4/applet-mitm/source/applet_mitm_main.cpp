@@ -426,9 +426,13 @@ namespace ams {
         void ScreenFollowStream() {
             static bool dark = false, tried = false, lbl_ok = false;
             /* and the game is drawing: HOME with detach_on_home = 0 keeps the
-             * session, but the screen should come back for the HOME menu */
+             * session, but the screen should come back for the HOME menu.
+             * v0.7.17: 2.5 s without a frame, not 1 - since v0.7.16 a session
+             * outlives a game's short pauses, and Final Fantasy Resonance's
+             * battle transitions (just over 1 s) flashed the screen on and off
+             * (#20) */
             const u64 qt = mitm::applet::g_queue_tick.load(std::memory_order_relaxed);
-            const bool drawing = qt != 0 && armTicksToNs(armGetSystemTick() - qt) < UINT64_C(1000000000);
+            const bool drawing = qt != 0 && armTicksToNs(armGetSystemTick() - qt) < UINT64_C(2500000000);
             const bool want = g_screen_off.load(std::memory_order_relaxed) && drawing &&
                               mitm::applet::g_streaming_now.load(std::memory_order_relaxed);
             if (want == dark) { return; }

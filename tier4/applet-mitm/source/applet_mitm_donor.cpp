@@ -511,6 +511,8 @@ namespace ams::mitm::applet {
         LogLine("donor: the Applet pool has room again (%llu MB free beside our %llu) - the full %u MB for a 1080p picture",
                 static_cast<unsigned long long>(free_mb), static_cast<unsigned long long>(ours_mb), FullDonorMb);
         return true;
+    }
+
     bool HomeDetachShouldFire(u64 stall_age_ms, u32 probe_ms, u32 fallback_ms, const char **out_reason) {
         if (probe_ms < 50) { probe_ms = 50; }
         if (fallback_ms < probe_ms) { fallback_ms = probe_ms; }

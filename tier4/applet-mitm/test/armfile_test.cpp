@@ -195,6 +195,9 @@ int main() {
     ExpectRelease("overlays = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio overlays");
     ExpectRelease("overlays = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
     ExpectRelease("home_menu = 1\noverlays = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio homemenu overlays");
+    /* v0.7.18: homebrew told the console is docked */
+    ExpectRelease("homebrew_docked = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio hbdocked");
+    ExpectRelease("homebrew_docked = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
     ExpectContains("vic live nodethome wait=20\n", "nodethome", true);
     ExpectContains("vic live wait=20\n", "nodethome", false);
 

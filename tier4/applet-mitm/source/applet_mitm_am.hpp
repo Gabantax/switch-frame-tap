@@ -14,9 +14,24 @@
  * with the game's pid), its IApplicationProxy (GetLibraryAppletCreator only)
  * and the creator (CreateLibraryApplet only). Every other command forwards
  * untouched (domain objects we do not own, undeclared commands).
+ *
+ * v0.7.18: "homebrew_docked" (config homebrew_docked = 1, arm word hbdocked):
+ * homebrew started from the Homebrew Menu (hbl, holding R over a game) is
+ * wrapped too, and its ICommonStateGetter says the console is docked -
+ * GetOperationMode Console, GetPerformanceMode Boost, GetDefaultDisplayResolution
+ * 1920x1080 - so an app that picks its resolution from that (SDL2 ports,
+ * emulators) draws at 1080p; the console's screen scales it as it does a
+ * game's 1080p in ReverseNX's docked mode. Retail games are never told.
  */
 #pragma once
 #include <stratosphere.hpp>
+
+#define AMS_AM_STATE_MITM_INTERFACE_INFO(C, H) \
+    AMS_SF_METHOD_INFO(C, H, 5,  Result, GetOperationMode,            (sf::Out<u8> out), (out)) \
+    AMS_SF_METHOD_INFO(C, H, 6,  Result, GetPerformanceMode,          (sf::Out<u32> out), (out)) \
+    AMS_SF_METHOD_INFO(C, H, 60, Result, GetDefaultDisplayResolution, (sf::Out<s32> out_w, sf::Out<s32> out_h), (out_w, out_h), hos::Version_3_0_0)
+
+AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IAmStateMitm, AMS_AM_STATE_MITM_INTERFACE_INFO, 0x2AB1E153)
 
 #define AMS_AM_CREATOR_MITM_INTERFACE_INFO(C, H) \
     AMS_SF_METHOD_INFO(C, H, 0, Result, CreateLibraryApplet, (u32 applet_id, u32 mode), (applet_id, mode))
@@ -24,6 +39,7 @@
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IAmCreatorMitm, AMS_AM_CREATOR_MITM_INTERFACE_INFO, 0x2AB1E150)
 
 #define AMS_AM_PROXY_MITM_INTERFACE_INFO(C, H) \
+    AMS_SF_METHOD_INFO(C, H, 0,  Result, GetCommonStateGetter,    (sf::Out<sf::SharedPointer<ams::mitm::applet::IAmStateMitm>> out), (out)) \
     AMS_SF_METHOD_INFO(C, H, 11, Result, GetLibraryAppletCreator, (sf::Out<sf::SharedPointer<ams::mitm::applet::IAmCreatorMitm>> out), (out))
 
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IAmProxyMitm, AMS_AM_PROXY_MITM_INTERFACE_INFO, 0x2AB1E151)
@@ -34,6 +50,20 @@ AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IAmProxyMitm, AMS_AM_PROXY_MITM_
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IAmOeMitm, AMS_AM_OE_MITM_INTERFACE_INFO, 0x2AB1E152)
 
 namespace ams::mitm::applet {
+
+    /* v0.7.18: homebrew is told the console is docked (config homebrew_docked) */
+    extern std::atomic<bool> g_hb_docked;
+
+    class AmStateMitm : public sf::MitmServiceImplBase {
+        public:
+            using MitmServiceImplBase::MitmServiceImplBase;
+            static bool ShouldMitm(const sm::MitmProcessInfo &) { return true; }
+        public:
+            Result GetOperationMode(sf::Out<u8> out);
+            Result GetPerformanceMode(sf::Out<u32> out);
+            Result GetDefaultDisplayResolution(sf::Out<s32> out_w, sf::Out<s32> out_h);
+    };
+    static_assert(IsIAmStateMitm<AmStateMitm>);
 
     class AmCreatorMitm : public sf::MitmServiceImplBase {
         public:
@@ -49,6 +79,7 @@ namespace ams::mitm::applet {
             using MitmServiceImplBase::MitmServiceImplBase;
             static bool ShouldMitm(const sm::MitmProcessInfo &) { return true; }
         public:
+            Result GetCommonStateGetter(sf::Out<sf::SharedPointer<IAmStateMitm>> out);
             Result GetLibraryAppletCreator(sf::Out<sf::SharedPointer<IAmCreatorMitm>> out);
     };
     static_assert(IsIAmProxyMitm<AmProxyMitm>);
@@ -57,7 +88,9 @@ namespace ams::mitm::applet {
         public:
             using MitmServiceImplBase::MitmServiceImplBase;
             static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
-                return ncm::IsApplicationId(client_info.program_id) && !client_info.override_status.IsHbl();
+                /* v0.7.18: the Homebrew Menu's apps too when they are to be told the console is docked */
+                return ncm::IsApplicationId(client_info.program_id) &&
+                       (!client_info.override_status.IsHbl() || g_hb_docked.load(std::memory_order_relaxed));
             }
         public:
             Result OpenApplicationProxy(sf::Out<sf::SharedPointer<IAmProxyMitm>> out, const sf::ClientProcessId &client_pid, sf::CopyHandle &&process);

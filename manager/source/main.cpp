@@ -225,6 +225,7 @@ namespace {
         std::string early = "1";  /* v0.7.12: early_collect (1 / 0 / ab); kept when saving */
         bool home_menu = false;   /* v0.7.14: stream the HOME menu and system applets too (beta); from the next boot */
         bool overlays = false;    /* v0.7.14: the system overlays in the stream (beta); from the next boot */
+        bool hb_docked = false;   /* v0.7.18: homebrew is told the console is docked (1080p); the next app started */
         bool update_betas = false;/* v0.7.14: "Check for updates" offers pre-releases too (this app's own key) */
         int conn = 0;           /* v0.7: connection - 0 USB (PC viewer), 1 USB webcam, 2 (v0.7.7) USB webcam NV12, 3 network; from the next boot */
     };
@@ -275,6 +276,7 @@ namespace {
         if (IniGet(ini, "audio", &v)) { s.audio = v != "0"; }
         if (IniGet(ini, "home_menu", &v)) { s.home_menu = v == "1"; }
         if (IniGet(ini, "overlays", &v)) { s.overlays = v == "1"; }
+        if (IniGet(ini, "homebrew_docked", &v)) { s.hb_docked = v == "1"; }
         if (IniGet(ini, "update_betas", &v)) { s.update_betas = v == "1"; }
         /* the v0.4-v0.7 keys first, then the one that replaced them */
         if (IniGet(ini, "usb_mode", &v) && v == "webcam") { s.conn = 1; }
@@ -329,11 +331,14 @@ namespace {
             "home_menu = %d\n"
             "# overlays: 1 = the volume bar, quick settings, power menu and Tesla/Ultrahand menus in the stream (beta). Read at boot.\n"
             "overlays = %d\n"
+            "# homebrew_docked: 1 = homebrew started from the Homebrew Menu is told the console is docked, so apps that\n"
+            "#                  choose their resolution from that draw at 1080p (beta). From the next app started.\n"
+            "homebrew_docked = %d\n"
             "# update_betas: 1 = Check for updates in the app also offers betas (pre-releases)\n"
             "update_betas = %d\n",
             QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080",
             DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, custom, s.shot_album ? "album" : "app", s.detach_home ? 1 : 0, s.screen_off ? 1 : 0, s.early.c_str(),
-            s.audio ? 1 : 0, ConnKeys[s.conn], s.home_menu ? 1 : 0, s.overlays ? 1 : 0, s.update_betas ? 1 : 0);
+            s.audio ? 1 : 0, ConnKeys[s.conn], s.home_menu ? 1 : 0, s.overlays ? 1 : 0, s.hb_docked ? 1 : 0, s.update_betas ? 1 : 0);
         std::fclose(f);
         return true;
     }
@@ -802,6 +807,13 @@ namespace {
                     "second, so they move less smoothly than the game, and the power menu is a little soft.",
                     [this] { return (have_status && RunningOverlays() != set.overlays) ? std::string("Restart to apply") : std::string(); },
                     [] { return ui::Warn; }));
+                /* v0.7.18 */
+                p.rows.push_back(Section("From the next app you start"));
+                p.rows.push_back(Toggle("Homebrew in docked mode (1080p)", [this] { return set.hb_docked; },
+                    [this](int) { set.hb_docked = !set.hb_docked; Saved(); },
+                    "Tells homebrew started from the Homebrew Menu (hold R over a game) that the console is docked, so "
+                    "apps that choose their resolution from that - SDL2 ports, emulators - draw at 1080p and stream at "
+                    "1080p. The console's screen still shows them. Apps with a fixed 1280x720 picture stay 720p."));
                 pages.push_back(std::move(p));
             }
 

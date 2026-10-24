@@ -29,6 +29,7 @@ final class Recorder {
     private final ArrayBlockingQueue<SftProtocol.Packet> queue = new ArrayBlockingQueue<>(240);
     private final Thread thread;
     private volatile boolean stopping;
+    private volatile boolean split;   // v0.7.18: the picture size changed - a new file goes on (#44)
     private volatile String failure;
     final long startedNs = System.nanoTime();
 
@@ -59,6 +60,8 @@ final class Recorder {
         if (!queue.offer(packet)) { failure = "this device could not keep up with the recording"; stopping = true; }
     }
     void stop() { stopping = true; }
+    /** The recording ended only because the picture size changed: the app starts the next file. */
+    boolean continues() { return split; }
 
     private void run() {
         boolean saved = false;
@@ -81,6 +84,7 @@ final class Recorder {
             if (aac != null && started) endAudio();
             if (started && videoFrames > 0) { muxer.stop(); saved = true; }
             message = failure != null ? "Recording stopped: " + failure
+                    : saved && split ? "Saved " + target.shown + " - the picture size changed, recording goes on in a new file"
                     : saved ? "Recording saved to " + target.shown
                     : "Nothing was recorded (no picture arrived)";
         } catch (IOException | RuntimeException | InterruptedException e) {
@@ -120,9 +124,9 @@ final class Recorder {
         if (p.audio()) { audio(p); return; }
         if (p.status()) return;
         if (videoFormat != null && p.key() && (p.width != width || p.height != height)) {
-            // docked <-> handheld: an MP4 track keeps one picture size
-            failure = "the picture size changed (" + width + "x" + height + " to " + p.width + "x" + p.height + ")";
-            stopping = true; return;
+            // docked <-> handheld, the HOME menu at 720p: an MP4 track keeps one
+            // picture size, so this file ends and the next one goes on (as the PC viewer does)
+            split = true; stopping = true; return;
         }
         if (videoFormat == null) {
             if (!p.key()) return;   // the file starts at a keyframe

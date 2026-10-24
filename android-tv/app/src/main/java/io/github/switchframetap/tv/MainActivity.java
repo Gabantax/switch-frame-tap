@@ -458,9 +458,11 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         final Recorder r;
         try {
             r = new Recorder(Capture.newVideo(getApplicationContext()), (done, saved, text) -> handler.post(() -> {
+                boolean next = recorder == done && done.continues() && !recordStopping;
                 if (recorder == done) { recorder = null; recordStopping = false; }
                 updateRecording();
                 toast(text);
+                if (next) toggleRecording();   // v0.7.18: the next file, at the new size (#44)
             }));
         } catch (IOException | RuntimeException e) { toast("Could not start recording: " + e.getMessage()); return; }
         recorder = r; r.start(); engine.record(r);

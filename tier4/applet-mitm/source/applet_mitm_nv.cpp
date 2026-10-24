@@ -1904,6 +1904,7 @@ namespace ams::mitm::applet {
     constinit std::atomic<bool> g_stream_enabled{true};
     constinit std::atomic<bool> g_reconfig_request{false};
     constinit std::atomic<u64>  g_app_tid{0};
+    constinit std::atomic<u64>  g_vim_program{0};
     constinit std::atomic<bool> g_app_excluded{false};
     constinit std::atomic<u32>  g_live_state{LiveState_Starting};
     constinit std::atomic<bool> g_streaming_now{false};
@@ -3437,6 +3438,7 @@ namespace ams::mitm::applet {
                 }
             }
             u64 skip_pid = 0;          /* a game whose swapchain was not found: wait for another */
+            u32 skip_gen = 0;          /* v0.7.17: ...or for its next buffer set (PokeMMO: a splash first, its game buffers 7 s later) */
             bool said_wait_viewer = false, said_wait_game = false;
             u32 sessions = 0;
             bool said_off = false;
@@ -3493,6 +3495,11 @@ namespace ams::mitm::applet {
                 const bool have_app = g_pmdmnt_rc == 0 && R_SUCCEEDED(::ams::pm::dmnt::GetApplicationProcessId(std::addressof(pid)));
                 /* v0.7.14: the Album / hbmenu draws with buffers of its own, like a game */
                 const u64 applet_pid = g_ui_stream_armed ? g_applet_target_pid.load(std::memory_order_relaxed) : 0;
+                if (skip_pid != 0 && have_app && pid.value == skip_pid && g_game_surface.generation != skip_gen) {
+                    LogLine("   live: the game made new frame buffers - looking for its swapchain again");
+                    skip_pid = 0;
+                    said_wait_game = false;
+                }
                 if ((have_app && pid.value != skip_pid) || applet_pid != 0) {
                     /* presenting? a suspended or loading-from-boot game is not */
                     os::SleepThread(TimeSpan::FromMilliSeconds(200));
@@ -3634,6 +3641,7 @@ namespace ams::mitm::applet {
                 if (!found) {
                     DbgDetach(dbg);
                     skip_pid = pid.value;
+                    skip_gen = geo.generation;
                     continue;
                 }
                 if (!DbgIsDmnt(dbg)) { DebugPumpStart(dbg); }
@@ -6030,6 +6038,78 @@ namespace ams::mitm::applet {
          * reverse: the slot copy pinned for the VIC, the arena pinned for the
          * VIC and for a new msenc channel. A channel whose job stalled is left
          * OPEN (M74: tearing down a stuck channel took the compositor with it). */
+        /* v0.7.17: where a homebrew's swapchain buffers are, from the app
+         * itself. libnx keeps every nvmap object in a struct NvMap { u32
+         * handle; u32 id; u32 size; void *cpu_addr; ... } (nvidia/map.h) -
+         * deko3d's memory blocks and libnx's Framebuffer both hold one - and
+         * the parcels give us each slot's id. So: find those structs in the
+         * app's writable memory (its .data/.bss and the start of its heap)
+         * and take cpu_addr. gen1recomp and Dusklight draw into buffers no
+         * device but the GPU maps, among dozens of their size: watching them
+         * change never told the slots apart (flicker, a broken picture).
+         * Out: out[k] the CPU address of ids[k]'s object; false unless all. */
+        u32 FindLibnxNvMaps(::ams::svc::Handle dbg, const u32 *ids, u32 n, u32 min_size, u64 *out) {
+            if (g_ind_buf == nullptr || g_ind_size < 0x10000 || n == 0 || n > 8) { return 0; }
+            const u64 t0 = armTicksToNs(armGetSystemTick());
+            const size_t chunk = g_ind_size >= 0x100000 ? 0x100000 : 0x10000;
+            u32 found = 0;
+            for (u32 k = 0; k < n; ++k) { out[k] = 0; }
+            u64 scanned = 0, addr = 0;
+            /* v0.7.17: 1 GB - Dusklight (Mesa's OpenGL) keeps two of its three
+             * records past the first 256 MB of a heap full of game data */
+            constexpr u64 Budget = UINT64_C(1024) << 20;
+            for (u32 steps = 0; steps < 4000 && found < n && scanned < Budget; ++steps) {
+                ::ams::svc::MemoryInfo mi = {};
+                ::ams::svc::PageInfo   pi = {};
+                if (!DbgQuery(dbg, std::addressof(mi), std::addressof(pi), addr) || mi.size == 0) { break; }
+                const u32 attr = static_cast<u32>(mi.attribute);
+                const bool dev = (attr & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || mi.device_count > 0;
+                const u32 st = static_cast<u32>(mi.state);
+                const bool rw = (static_cast<u32>(mi.permission) & 3) == 3;
+                const bool data = st == static_cast<u32>(::ams::svc::MemoryState_CodeData) || st == static_cast<u32>(::ams::svc::MemoryState_AliasCodeData) ||
+                                  st == static_cast<u32>(::ams::svc::MemoryState_Normal);
+                if (rw && data && !dev) {
+                    for (u64 off = 0; off < mi.size && found < n && scanned < Budget; off += chunk) {
+                        const size_t len = static_cast<size_t>(mi.size - off < chunk ? mi.size - off : chunk);
+                        if (!DbgRead(dbg, g_ind_buf, mi.base_address + off, len)) { break; }
+                        scanned += len;
+                        /* the struct is 8-aligned: id at +4, size at +8, cpu_addr at +16 */
+                        for (size_t q = 0; q + 24 <= len; q += 8) {
+                            u32 f[4];
+                            std::memcpy(f, g_ind_buf + q, sizeof(f));
+                            if (f[0] == 0 || f[2] < min_size) { continue; }
+                            for (u32 k = 0; k < n; ++k) {
+                                if (out[k] != 0 || f[1] != ids[k]) { continue; }
+                                u64 va = 0;
+                                std::memcpy(std::addressof(va), g_ind_buf + q + 16, sizeof(va));
+                                if (va == 0 || (va & 0xFFF) != 0) { continue; }
+                                ::ams::svc::MemoryInfo vm = {};
+                                ::ams::svc::PageInfo   vp = {};
+                                if (!DbgQuery(dbg, std::addressof(vm), std::addressof(vp), va)) { continue; }
+                                const bool vdev = (static_cast<u32>(vm.attribute) & ::ams::svc::MemoryAttribute_DeviceShared) != 0 || vm.device_count > 0;
+                                if (!vdev || va + f[2] > vm.base_address + vm.size) { continue; }
+                                out[k] = va;
+                                ++found;
+                                /* the same id twice (one object, slots at offsets) */
+                                for (u32 j = k + 1; j < n; ++j) { if (ids[j] == ids[k] && out[j] == 0) { out[j] = va; ++found; } }
+                            }
+                        }
+                    }
+                }
+                const u64 next = mi.base_address + mi.size;
+                if (next <= addr) { break; }
+                addr = next;
+            }
+            char line[200];
+            int len = std::snprintf(line, sizeof(line), "   swapchain: libnx's nvmap records - %u of %u found in %llu MB of the app's memory (%llu ms):", found, n,
+                                    static_cast<unsigned long long>(scanned >> 20), static_cast<unsigned long long>((armTicksToNs(armGetSystemTick()) - t0) / 1000000));
+            for (u32 k = 0; k < n && len > 0 && static_cast<size_t>(len) < sizeof(line); ++k) {
+                len += std::snprintf(line + len, sizeof(line) - len, " %u=%llx", ids[k], static_cast<unsigned long long>(out[k]));
+            }
+            LogLine("%s", line);
+            return found;
+        }
+
         struct NvfSession {
             u32 vfd = 0, cmd_handle = 0, vsyncpt = 0, cfg_addr = 0;
             u32 sh = 0, slot_vic = 0, arena_vic = 0;
@@ -6078,6 +6158,9 @@ namespace ams::mitm::applet {
             bool sep = false;              /* reading per-slot buffers */
             bool sep_locked = false;       /* matched (or given up): no more sampling */
             bool still_guessed = false;    /* slot_cand from StillGuess (a still picture), not yet matched */
+            bool chain_display = false;    /* v0.7.17: slot_cand is a run of buffers the display maps too */
+            u32 slot_nv[8] = {};           /* v0.7.17: each slot's nvmap id (the parcels) */
+            u64 slot_cpu[8] = {};          /* v0.7.17: a homebrew's slots, from libnx's records (FindLibnxNvMaps) */
             bool guess_trusted = false;    /* v0.7.3: slot_cand is the last session's match */
             u32 held_ms = 0;               /* v0.7.3: how long the first frames waited for the match */
             bool hold_done = false;        /* v0.7.3: the wait happens once a session */
@@ -6104,6 +6187,28 @@ namespace ams::mitm::applet {
                 const bool exact = DbgQuery(dbg, std::addressof(mi), std::addressof(pi), slot_base) &&
                                    mi.base_address == slot_base && mi.size == span;
                 if (!sep_layout && exact) { return; }
+                /* v0.7.17: a homebrew (vi:m) - its own records say where the
+                 * slots are; nothing to match */
+                u64 nv_base[8] = {};
+                u32 nv_found = 0;
+                if (g_vim_program.load(std::memory_order_relaxed) == g_app_tid.load(std::memory_order_relaxed) && nslots <= 8) {
+                    u64 *const base = nv_base;
+                    nv_found = FindLibnxNvMaps(dbg, slot_nv, nslots, sep_layout ? buf_bytes : buf_bytes / 2, base);
+                    if (nv_found == nslots) {
+                        ncand = nslots;
+                        for (u32 k = 0; k < nslots; ++k) { cand[k] = base[k] + slot_off[k]; slot_cand[k] = static_cast<u8>(k); slot_cpu[k] = cand[k]; }
+                        sep = true;
+                        sep_locked = true;
+                        guess_trusted = true;
+                        char line[200];
+                        int len = std::snprintf(line, sizeof(line), "   %s: slots from the app's nvmap records:", who);
+                        for (u32 k = 0; k < nslots && len > 0 && static_cast<size_t>(len) < sizeof(line); ++k) {
+                            len += std::snprintf(line + len, sizeof(line) - len, " %u->0x%010llx", k, static_cast<unsigned long long>(cand[k]));
+                        }
+                        LogLine("%s", line);
+                        return;
+                    }
+                }
                 u32 devc[MaxSlotCand] = {};
                 /* v0.7.17: more than the matcher takes, then the likeliest first.
                  * Super Mario Sunshine (3D All-Stars) has dozens of 1280x720
@@ -6173,8 +6278,68 @@ namespace ams::mitm::applet {
                         if (cand[c] == want_addr) { slot_cand[k] = static_cast<u8>(c); break; }
                     }
                 }
+                /* v0.7.17: the first guess for one object per slot - a run of
+                 * nslots buffers end to end (gaps of at most 256 KB), the
+                 * display's mapping first. Every match logged so far was one
+                 * (slot k the k-th buffer of the run); homebrew (deko3d,
+                 * libnx) often never gets matched - gen1recomp flickered for a
+                 * minute on "the first guess", candidates 0-2 in address
+                 * order, which were not its slots. */
+                chain_display = false;
+                bool anchored = false;   /* v0.7.17: slots from the app's records (some of them) */
+                if (sep_layout && nslots >= 2 && ncand >= nslots) {
+                    auto run_at = [&](u32 c0) -> bool {
+                        for (u32 k = 1; k < nslots; ++k) {
+                            const u64 gap = cand[c0 + k] - cand[c0 + k - 1];
+                            if (gap < buf_bytes || gap > static_cast<u64>(buf_bytes) + 0x40000) { return false; }
+                        }
+                        return true;
+                    };
+                    s32 pick = -1, pick_base = -1, pick_any = -1;
+                    for (u32 c0 = 0; c0 + nslots <= ncand; ++c0) {
+                        if (!run_at(c0)) { continue; }
+                        bool disp = true;
+                        for (u32 k = 0; k < nslots; ++k) { disp &= devc[c0 + k] >= 2; }
+                        if (disp && pick < 0) { pick = static_cast<s32>(c0); }
+                        if (pick_base < 0 && cand[c0] <= slot_base && slot_base < cand[c0 + nslots - 1] + buf_bytes) { pick_base = static_cast<s32>(c0); }
+                        if (pick_any < 0) { pick_any = static_cast<s32>(c0); }
+                    }
+                    chain_display = pick >= 0;
+                    if (pick < 0) { pick = pick_base >= 0 ? pick_base : pick_any; }
+                    if (pick >= 0) {
+                        for (u32 k = 0; k < nslots; ++k) { slot_cand[k] = static_cast<u8>(pick + k); }
+                        LogLine("   %s: first guess - %u buffers end to end at 0x%010llx%s", who, nslots, static_cast<unsigned long long>(cand[pick]),
+                                chain_display ? ", mapped for the display too" : (pick == pick_base ? ", where the swapchain was found" : ""));
+                    }
+                    /* v0.7.17: some of the slots from the app's records - the run
+                     * of buffers that holds them all, the rest end to end beside them */
+                    if (nv_found > 0 && nv_found < nslots && sep_layout) {
+                        for (u32 c0 = 0; c0 + nslots <= ncand; ++c0) {
+                            if (!run_at(c0)) { continue; }
+                            bool all = true;
+                            for (u32 k = 0; k < nslots && all; ++k) { all = nv_base[k] == 0 || cand[c0 + k] == nv_base[k] + slot_off[k]; }
+                            if (!all) { continue; }
+                            for (u32 k = 0; k < nslots; ++k) { slot_cand[k] = static_cast<u8>(c0 + k); }
+                            sep = true;
+                            sep_locked = true;
+                            guess_trusted = true;
+                            chain_display = true;
+                            anchored = true;
+                            LogLine("   %s: %u of %u slots from the app's records, the rest the buffers end to end beside them (0x%010llx...)", who, nv_found, nslots,
+                                    static_cast<unsigned long long>(cand[c0]));
+                            break;
+                        }
+                    }
+                    /* what the candidates are, for the next look at a game that does not match */
+                    char line[240];
+                    int len = std::snprintf(line, sizeof(line), "   %s: candidates (address/device maps):", who);
+                    for (u32 c = 0; c < ncand && c < 12 && len > 0 && static_cast<size_t>(len) < sizeof(line); ++c) {
+                        len += std::snprintf(line + len, sizeof(line) - len, " %llx/%u", static_cast<unsigned long long>(cand[c]), devc[c]);
+                    }
+                    LogLine("%s%s", line, ncand > 12 ? " ..." : "");
+                }
                 bool reused = false;
-                if (g_slot_match.n == nslots && g_slot_match.buf == buf_bytes) {
+                if (!anchored && g_slot_match.n == nslots && g_slot_match.buf == buf_bytes) {
                     u8 m[8] = {};
                     u32 hits = 0;
                     for (u32 k = 0; k < nslots; ++k) {
@@ -6260,7 +6425,9 @@ namespace ams::mitm::applet {
                         len += std::snprintf(line + len, sizeof(line) - len, " %u->0x%010llx", s, static_cast<unsigned long long>(cand[m[s]]));
                     }
                     LogLine("%s", line);
-                } else if (u8 g[8] = {}; !still_guessed && slotmatch::StillGuess(sig, varied, ncand, nslots, !sep_layout, g)) {
+                } else if (u8 g[8] = {}; !still_guessed && !chain_display && slotmatch::StillGuess(sig, varied, ncand, nslots, !sep_layout, g)) {
+                    /* v0.7.17: not over a run the display maps - a homebrew's
+                     * still picture matched three other buffers (0138a83c...) */
                     /* the picture stands still: show it while waiting for motion */
                     std::memcpy(slot_cand, g, nslots);
                     still_guessed = true;
@@ -6284,7 +6451,7 @@ namespace ams::mitm::applet {
                 if (g.buf_size > MaxSlotBytes || g.width > 1920 || g.height > 1088) {
                     LogLine("   %s: buffer %ux%u, %u B - larger than %zu B, not supported", who, g.width, g.height, g.buf_size, MaxSlotBytes); return false;
                 }
-                for (u32 k = 0; k < 8; ++k) { slot_off[k] = g.slot_offset[k]; }
+                for (u32 k = 0; k < 8; ++k) { slot_off[k] = g.slot_offset[k]; slot_nv[k] = g.slot_nvmap[k]; }
                 nslots = g.num_slots;
                 /* one nvmap object per slot (Smash, Minecraft): their ids differ */
                 sep_layout = false;

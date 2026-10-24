@@ -204,6 +204,8 @@ namespace ams::mitm::applet {
      * never-attach list (sdmc:/config/switch-frame-tap/excluded.txt) - kept
      * current by the app watcher (applet_mitm_service.cpp) */
     extern std::atomic<u64>  g_app_tid;
+    /* v0.7.17: the last program that opened vi:m (a homebrew application) */
+    extern std::atomic<u64>  g_vim_program;
     extern std::atomic<bool> g_app_excluded;
     /* M98: new settings arrived (ReloadConfig): end the session, restart with them */
     extern std::atomic<bool> g_reconfig_request;

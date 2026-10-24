@@ -607,6 +607,7 @@ namespace ams::mitm::applet {
         LogMark("GetDisplayService:enter");
         LogLine("   program=%016llx cmd %u mode=%u%s", static_cast<unsigned long long>(ci.program_id.value), cmd, mode,
                 cmd == 2 ? " (vi:m - a homebrew application)" : "");
+        if (cmd == 2) { g_vim_program.store(ci.program_id.value, std::memory_order_relaxed); }
 
         ::Service disp_svc = {};
         const Result rc = serviceDispatchIn(fwd, cmd, mode,

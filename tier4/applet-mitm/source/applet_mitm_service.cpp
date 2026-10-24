@@ -576,6 +576,10 @@ namespace ams::mitm::applet {
                     if (now != 0 && info_ok && R_FAILED(::pminfoGetProgramId(&tid, now))) { tid = 0; }
                     g_app_tid.store(tid, std::memory_order_relaxed);
                     g_app_excluded.store(tid != 0 && IsExcluded(tid), std::memory_order_relaxed);
+                    /* v0.7.16: a new game has its own 5 s before it counts as not
+                     * presenting (LongNotPresenting) - the launcher's last present
+                     * made Mario 3D All-Stars' games look gone at once */
+                    if (now != 0) { g_app_present_tick.store(armGetSystemTick(), std::memory_order_relaxed); }
                     LogLine("app watch: application pid %llu, program %016llx%s", static_cast<unsigned long long>(now),
                             static_cast<unsigned long long>(tid), g_app_excluded.load() ? " (EXCLUDED)" : "");
                     const bool app_left = now == 0 && last != 0 && last != ~UINT64_C(0);

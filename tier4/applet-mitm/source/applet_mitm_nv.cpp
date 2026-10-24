@@ -57,6 +57,7 @@
 #include <atomic>
 #include <cstring>
 #include <cstdio>
+#include <utility>
 
 namespace ams::mitm::applet {
 
@@ -65,6 +66,20 @@ namespace ams::mitm::applet {
     constinit std::atomic<u64> g_applet_target_pid{0};
     constinit std::atomic<u64> g_present_pid{0};
     constinit std::atomic<u64> g_app_present_tick{0};
+
+    namespace {
+        /* v0.7.17: a web applet is open and the game has stopped drawing -
+         * Super Mario 3D All-Stars' "-" menu (OfflineWeb). It grows the
+         * Applet pool from there ("back to the game menu" ran it out with
+         * our 41 MB in it: LibAppletOf aborted 2003-0008, the console went
+         * down), so the donor's memory goes back at once and stays back
+         * until the game draws again. */
+        bool WebMenuUp() {
+            const u64 lp = g_app_present_tick.load(std::memory_order_relaxed);
+            if (lp != 0 && armTicksToNs(armGetSystemTick() - lp) < UINT64_C(500000000)) { return false; }
+            return WebAppletOpen();
+        }
+    }
     /* the record a running session's geometry came from: a new buffer set
      * there restarts it (the game's, or v0.7.14 the Album's / hbmenu's) */
     constinit const GameSurface *g_session_surface = &g_game_surface;
@@ -1997,6 +2012,13 @@ namespace ams::mitm::applet {
                     if (ShotRequestPending()) { break; }
                     if (UsbViewerPresent(300)) {
                         /* v0.7.14: the HOME menu streams too (home_menu = 1) */
+                        /* v0.7.17: not while a web applet's menu is over the game (WebMenuUp) */
+                        if (WebMenuUp()) {
+                            SetViewerReason(ViewerReason_AppletOpen);
+                            VicStage("vb:web_menu");
+                            os::SleepThread(TimeSpan::FromMilliSeconds(100));
+                            continue;
+                        }
                         if (g_ui_stream_armed) { break; }
                         const u32 q0 = g_queue_count.load(std::memory_order_relaxed);
                         os::SleepThread(TimeSpan::FromMilliSeconds(250));
@@ -2018,7 +2040,7 @@ namespace ams::mitm::applet {
                 if (!said_busy) { LogLine("   engines: %s - waiting for it to close", hold ? "an applet is starting" : "an applet holds the Applet pool"); said_busy = true; }
                 VicStage("vb:applet_busy");
                 SetViewerReason(ViewerReason_AppletOpen);
-                os::SleepThread(TimeSpan::FromSeconds(2));
+                os::SleepThread(TimeSpan::FromMilliSeconds(250));   /* v0.7.16: was 2 s - up to 2 s more before the picture after every applet */
             }
             g_applet_needs_memory.store(false, std::memory_order_relaxed);
             SetViewerReason(ViewerReason_Starting);
@@ -2256,6 +2278,17 @@ namespace ams::mitm::applet {
             MapCmdBuffer(vfd, self_handle, std::addressof(self_addr), "src(ours)", 0);
             LogLine("   pinned: cfg=0x%x dst=0x%x self=0x%x game_src=0x%x (+slot off 0x%x)",
                     cfg_addr, dst_addr, self_addr, src_addr, src_off);
+            /* v0.7.17: one of ours at device address 0 - the hole opened after
+             * the guard was mapped (Super Mario 3D All-Stars: Galaxy quit to
+             * the title list between the two). Every job of the setup is
+             * refused then ("cfg 0 - not running"), until a reboot. Close it
+             * all and set up again at once: the address is ours to free, and
+             * the next guard takes it. */
+            if (cfg_addr == 0 || dst_addr == 0 || self_addr == 0) {
+                LogLine("   engines: a buffer of ours got device address 0 (cfg=0x%x dst=0x%x self=0x%x) - setting up again", cfg_addr, dst_addr, self_addr);
+                VicStage("vb:8_zero_retry");
+                goto close_vic;
+            }
 
             /* Paint a recognisable pattern into the source we own, so a correct
              * blit is provable byte-for-byte rather than just "non-zero". */
@@ -3267,6 +3300,15 @@ namespace ams::mitm::applet {
         /* v0.7.14: the HOME menu or an applet, read out of vi (applet_mitm_uisource.hpp).
          * false: nothing was streamed (no shared buffer, no memory, no attach) */
         bool RunUiSession(u32 vfd, u32 nvmap_fd, u32 cmd_handle, u32 syncpt, u32 cfg_addr, u32 &sessions) {
+            /* v0.7.16: not while a web applet is open - Super Mario 3D
+             * All-Stars runs its games with OfflineWeb open; pressing "-"
+             * moved its menu onto a layer of its own, this session followed
+             * it (upside down) and the console went down a second later */
+            if (WebAppletOpen()) {
+                static bool said = false;
+                if (!said) { LogLine("   live-ui: a web applet is open - the HOME menu is not streamed meanwhile"); said = true; }
+                return false;
+            }
             u64 vpid = 0, base = 0;
             GameSurface ug = {};
             if (!UiSourceFind(std::addressof(vpid), std::addressof(base), std::addressof(ug))) {
@@ -3301,7 +3343,16 @@ namespace ams::mitm::applet {
             g_session_surface = std::addressof(g_game_surface);   /* ug's generation is the game's */
             g_ui_session_active.store(true, std::memory_order_relaxed);
             StreamEnd end = StreamEnd::Failed;
-            if (UiSourceStart(dbg, vpid, base)) {
+            const bool ui_started = UiSourceStart(dbg, vpid, base);
+            if (!ui_started && UiSourceIdle()) {
+                /* v0.7.16: nothing drawing (a game's loading pause) - let go of
+                 * vi at once and wait for the game, no 5 s pause */
+                g_ui_session_active.store(false, std::memory_order_relaxed);
+                DebugPumpStop();
+                DbgDetach(dbg);
+                return false;
+            }
+            if (ui_started) {
                 g_reconfig_request.store(false, std::memory_order_relaxed);
                 end = g_uvc_raw ? TryUvcRawStream(dbg, base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, std::addressof(ug))
                                 : TryNvencStream(dbg, base, vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, true, std::addressof(ug));
@@ -3472,9 +3523,17 @@ namespace ams::mitm::applet {
                 }
                 if (!have_target || pid.value == skip_pid || !presenting) {
                     /* v0.7.14: the HOME menu or an applet instead (home_menu = 1) */
-                    if (g_ui_stream_armed && RunUiSession(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, sessions)) {
-                        said_wait_game = false;
-                        continue;
+                    /* v0.7.17: a game that is loading - vi was just looked at and
+                     * nothing of the HOME menu drew: not again for a second */
+                    static u64 s_ui_look_ns = 0;
+                    const u64 look_now = armTicksToNs(armGetSystemTick());
+                    const bool look = !have_app || !UiSourceIdle() || look_now - s_ui_look_ns >= UINT64_C(1000000000);
+                    if (g_ui_stream_armed && look) {
+                        s_ui_look_ns = look_now;
+                        if (RunUiSession(vfd, nvmap_fd, cmd_handle, syncpt, cfg_addr, sessions)) {
+                            said_wait_game = false;
+                            continue;
+                        }
                     }
                     g_live_state.store(LiveState_WaitGame, std::memory_order_relaxed);
                     SetViewerReason(!have_app ? ViewerReason_NoGame : (pid.value == skip_pid ? ViewerReason_NotFound : ViewerReason_GameHidden));
@@ -3483,11 +3542,19 @@ namespace ams::mitm::applet {
                      * may open from the HOME menu; set up again when it draws.
                      * (PR #13 ends the session itself; detach_on_home = 0 keeps
                      * it all through HOME.) */
-                    if (g_donor_mode && g_detach_on_home && pid.value != skip_pid && (!have_app || LongNotPresenting())) {
-                        if (have_app) { PrepareForHomeMenu(); }   /* HOME, most likely: as the 1 s rule did, now after 5 s */
+                    /* v0.7.17: with the HOME menu streamed, a game behind nothing
+                     * that draws is loading (Duke Nukem, Super Mario 3D
+                     * All-Stars starting a game): the engines stay - closing
+                     * and setting them up again was ~1.5 s each, five times
+                     * over before Super Mario 64's first picture. A web
+                     * applet's menu over the game: always (WebMenuUp). */
+                    const bool web_menu = have_app && WebMenuUp();
+                    const bool loading = have_app && g_ui_stream_armed && UiSourceIdle();
+                    if (g_donor_mode && g_detach_on_home && pid.value != skip_pid && (!have_app || web_menu || (LongNotPresenting() && !loading))) {
                         CaptureRelease("live");
                         if (g_ind_buf == nullptr && g_capture_handles == 0) {
-                            LogLine("   live: %s - closing the engines, memory back to the system", have_app ? "the game is not on screen" : "no game");
+                            LogLine("   live: %s - closing the engines, memory back to the system",
+                                    !have_app ? "no game" : (web_menu ? "a web applet's menu is over the game" : "the game is not on screen"));
                             return;
                         }
                     }
@@ -3498,7 +3565,9 @@ namespace ams::mitm::applet {
                         said_wait_game = true;
                     }
                     CaptureRelease("live");
-                    os::SleepThread(TimeSpan::FromMilliSeconds(800));
+                    /* v0.7.17: a game that will draw again is looked for sooner
+                     * (plus the 200 ms present check above) */
+                    os::SleepThread(TimeSpan::FromMilliSeconds(have_app ? 100 : 800));
                     continue;
                 }
                 said_wait_game = false;
@@ -6036,7 +6105,41 @@ namespace ams::mitm::applet {
                                    mi.base_address == slot_base && mi.size == span;
                 if (!sep_layout && exact) { return; }
                 u32 devc[MaxSlotCand] = {};
-                ncand = FindSlotCandidates(dbg, buf_bytes, slot_off, nslots, sep_layout, cand, MaxSlotCand, devc);
+                /* v0.7.17: more than the matcher takes, then the likeliest first.
+                 * Super Mario Sunshine (3D All-Stars) has dozens of 1280x720
+                 * render targets below its two slots: the 48 the list held
+                 * were all of them, the match never came and the stream
+                 * showed whatever the first guess read. First the region the
+                 * swapchain was found in, then those mapped for the display
+                 * too (2 or more devices), then the rest in address order. */
+                {
+                    static constexpr u32 MaxScan = 192;
+                    static u64 all[MaxScan];
+                    static u32 all_devc[MaxScan];
+                    const u32 nall = FindSlotCandidates(dbg, buf_bytes, slot_off, nslots, sep_layout, all, MaxScan, all_devc);
+                    ncand = 0;
+                    if (nall <= MaxSlotCand) {
+                        for (u32 c = 0; c < nall; ++c) { cand[c] = all[c]; devc[c] = all_devc[c]; }
+                        ncand = nall;
+                    } else {
+                        bool taken[MaxScan] = {};
+                        const u64 sb_end = slot_base + mi.size;
+                        for (u32 pass = 0; pass < 3; ++pass) {
+                            for (u32 c = 0; c < nall && ncand < MaxSlotCand; ++c) {
+                                if (taken[c]) { continue; }
+                                const bool in_base = sep_layout && mi.base_address == slot_base && all[c] >= slot_base && all[c] < sb_end;
+                                if ((pass == 0 && in_base) || (pass == 1 && all_devc[c] >= 2) || pass == 2) {
+                                    cand[ncand] = all[c]; devc[ncand] = all_devc[c]; ++ncand; taken[c] = true;
+                                }
+                            }
+                        }
+                        /* address order again - the matcher and the logs expect it */
+                        for (u32 i = 1; i < ncand; ++i) {
+                            for (u32 j = i; j > 0 && cand[j - 1] > cand[j]; --j) { std::swap(cand[j - 1], cand[j]); std::swap(devc[j - 1], devc[j]); }
+                        }
+                        LogLine("   %s: %u candidate buffers in the game's memory - kept %u: the swapchain's region, then those the display maps too", who, nall, ncand);
+                    }
+                }
                 /* v0.7.3: one object holding the slots, in more than one region
                  * that could hold it (Sonic: two pools laid out alike) - the
                  * swapchain's region is also mapped for the display, so drop
@@ -6064,8 +6167,10 @@ namespace ams::mitm::applet {
                 }
                 for (u32 k = 0; k < nslots; ++k) {
                     slot_cand[k] = static_cast<u8>(k);
-                    for (u32 c = 0; c < ncand && !sep_layout; ++c) {
-                        if (cand[c] == slot_base + slot_off[k]) { slot_cand[k] = static_cast<u8>(c); break; }
+                    /* v0.7.17: one object per slot - first guess the swapchain's region, slot k its k-th buffer */
+                    const u64 want_addr = sep_layout ? slot_base + static_cast<u64>(k) * buf_bytes : slot_base + slot_off[k];
+                    for (u32 c = 0; c < ncand; ++c) {
+                        if (cand[c] == want_addr) { slot_cand[k] = static_cast<u8>(c); break; }
                     }
                 }
                 bool reused = false;
@@ -7219,7 +7324,7 @@ namespace ams::mitm::applet {
                     const u64 qt = g_queue_tick.load(std::memory_order_relaxed);
                     if (qt != 0) {
                         const u64 age_ns = armTicksToNs(armGetSystemTick() - qt);
-                        if (age_ns >= UINT64_C(1000000000)) {
+                        if (age_ns >= UINT64_C(5000000000) || (age_ns >= UINT64_C(500000000) && WebMenuUp())) {   /* v0.7.16: 5 s, was 1 - a loading pause keeps its session: no re-attach, no lost second (Duke Nukem); v0.7.17: 0.5 s with a web applet open (WebMenuUp) */
                             why = "HOME / game stopped presenting";
                             /* v0.7.16: not here - a loading screen stops presenting too (Doom 3, Duke Nukem: ~7 s without picture each time); the wait for the game gives the memory back after 5 s (LongNotPresenting) */
                             end = StreamEnd::GameGone;
@@ -7673,7 +7778,7 @@ namespace ams::mitm::applet {
                     const u64 qt = g_queue_tick.load(std::memory_order_relaxed);
                     if (qt != 0) {
                         const u64 age_ns = armTicksToNs(armGetSystemTick() - qt);
-                        if (age_ns >= UINT64_C(1000000000)) {
+                        if (age_ns >= UINT64_C(5000000000) || (age_ns >= UINT64_C(500000000) && WebMenuUp())) {   /* v0.7.16: 5 s, was 1 - a loading pause keeps its session: no re-attach, no lost second (Duke Nukem); v0.7.17: 0.5 s with a web applet open (WebMenuUp) */
                             why = "HOME / game stopped presenting";
                             /* Free the 42 MB donor before SwitchU Album inits,
                              * and hold re-setup so a connected viewer does not

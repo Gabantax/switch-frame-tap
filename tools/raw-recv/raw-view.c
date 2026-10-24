@@ -1894,13 +1894,14 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                  * or in the background, the stream turned off): the menu
                  * instead of a frozen frame */
                 const Uint64 nowm = SDL_GetPerformanceCounter();
-                /* v0.7.16: 4 s, not 1.5 - a loading screen draws nothing for
-                 * a moment too (Duke Nukem, Doom 3: ~1.6 s), and the TV keeps
-                 * the last picture meanwhile; the menu only for a longer gap */
-                if (!g_menu && (!t_prev_show || (double)(nowm - t_prev_show) / (double)freq > 4.0)) {
+                /* v0.7.16: 8 s, not 1.5 - a loading screen draws nothing for
+                 * a while too (Duke Nukem: ~5 s, Doom 3), and the TV keeps
+                 * the last picture meanwhile; the menu only for a longer gap
+                 * (the HOME menu itself streams at once with home_menu on) */
+                if (!g_menu && (!t_prev_show || (double)(nowm - t_prev_show) / (double)freq > 8.0)) {
                     g_menu = 1;
                     g_menu_state = t_prev_show ? MENU_PAUSED : MENU_CONNECTED;
-                    if (t_prev_show) fprintf(stderr, "\nno new picture for 4 s - showing the menu\n");
+                    if (t_prev_show) fprintf(stderr, "\nno new picture for 8 s - showing the menu\n");
                 }
                 if (g_menu && (double)(nowm - t_menu) / (double)freq > 0.2) { menu_draw(ren); t_menu = nowm; }
             }

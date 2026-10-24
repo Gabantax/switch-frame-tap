@@ -14,7 +14,11 @@ final class SftProtocol {
         /** Returns 0 on an idle timeout, -1 on EOF. Never discard partial reads. */
         int read(byte[] data, int offset, int length) throws IOException;
         @Override void close() throws IOException;
+        /** "SFTK": the console sends a keyframe now instead of at its next one
+         *  (up to 4 s away over the network). Consoles before v0.7.13 ignore it. */
+        default void requestKeyframe() { }
     }
+    static final byte[] KEYFRAME_REQUEST = { 'S', 'F', 'T', 'K' };
     static final class Packet {
         final int flags, width, height;
         final long sequence, consoleAgeUs, receivedNs;

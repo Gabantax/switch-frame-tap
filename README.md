@@ -284,6 +284,18 @@ prints the one `sudo` command that installs the USB rule (lets the viewer open
 the Switch). It is a single program with FFmpeg, SDL 2 and libusb built in.
 `./install.sh --remove` uninstalls it.
 
+Or, without installing anything, the **AppImage**
+`switch-frame-tap-<version>-linux-x86_64.AppImage`: make it executable
+(`chmod +x`, or the file's Properties) and double-click it. It updates itself
+like the other viewers. Or the **Flatpak bundle**
+`switch-frame-tap-<version>-linux.flatpak`: `flatpak install --user
+switch-frame-tap-<version>-linux.flatpak` (its runtime comes from Flathub). For
+USB, both need the USB rule once:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TomasUribe/switch-frame-tap/master/tools/raw-recv/99-switch-frame-tap.rules | sudo tee /etc/udev/rules.d/99-switch-frame-tap.rules && sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
 On **KDE Plasma** the viewer uses the session's Wayland driver when there is
 one (the old XWayland path could freeze the window on a high-refresh desktop).
 Its log is `$XDG_STATE_HOME/switch-frame-tap/viewer.log` (normally
@@ -453,8 +465,9 @@ console" stays as you set it). Restart the console to finish.
 **The viewers** (Windows, Linux, macOS, Android) look for a new version when
 they open and show **Update to vX** on their home screen; Settings has
 **Updates** with a Check button. One click downloads it, replaces the viewer's
-files and restarts it (Android asks you to confirm the install). Builds from
-source and the Flatpak update the way they were installed.
+files and restarts it (Android asks you to confirm the install). The AppImage
+replaces itself. Builds from source update the way they were installed, and the
+Flatpak bundle with the next `.flatpak` from the releases page.
 
 **Include betas** (in each app) also offers test versions; off, only full
 releases.
@@ -620,7 +633,7 @@ system memory. Please attach them to a bug report, with any new files in
 ```bash
 git clone --recursive https://github.com/Atmosphere-NX/Atmosphere ref/Atmosphere
 git clone https://github.com/WerWolv/libtesla ref/libtesla
-bash tools/make_release.sh VERSION     # -> dist/switch-frame-tap-VERSION-{switch.zip,linux.tar.gz,windows-viewer.zip} (macOS, Android: GitHub Actions on the tag)
+bash tools/make_release.sh VERSION     # -> dist/switch-frame-tap-VERSION-{switch.zip,linux.tar.gz,windows-viewer.zip} (macOS, Android, the Linux AppImage and Flatpak bundle: GitHub Actions on the tag)
 bash tools/run_pc_tests.sh             # every check that needs no console
 ```
 

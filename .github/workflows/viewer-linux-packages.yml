@@ -1,0 +1,108 @@
+name: Linux packages
+
+# v0.7.17: the Linux viewer as an AppImage and as a Flatpak bundle (.flatpak),
+# next to the portable tarball, on every version tag. Run by hand from the
+# Actions tab with a tag in "source" to build them for an existing release
+# (the packaging scripts are always this branch's). The files are the run's
+# artifacts; the release process attaches them, as the macOS zips.
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Tag or commit to build (default: this branch)'
+        required: false
+      version:
+        description: 'Version in the file names (default: the tag)'
+        required: false
+  push:
+    tags: ['v*']
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    # glibc 2.35, as the portable tarball: the AppImage runs on Ubuntu 22.04 and newer
+    container: ubuntu:22.04
+    steps:
+      - name: Tools
+        run: |
+          apt-get update -q
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
+            git ca-certificates curl xz-utils file python3 build-essential pkg-config nasm \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
+            libxxf86vm-dev libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev \
+            libgles2-mesa-dev libdecor-0-dev libdrm-dev libgbm-dev libpulse-dev libasound2-dev \
+            libusb-1.0-0-dev libudev-dev
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Source
+        id: v
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          src="${{ inputs.source }}"
+          if [ -n "$src" ]; then
+            # this branch's packaging scripts, the tag's source
+            mkdir -p "$RUNNER_TEMP/pkg"
+            cp tools/raw-recv/build-appimage.sh tools/raw-recv/build-linux-portable.sh "$RUNNER_TEMP/pkg/"
+            git checkout --force "$src"
+            cp "$RUNNER_TEMP/pkg/"*.sh tools/raw-recv/
+          fi
+          v="${{ inputs.version }}"
+          [ -n "$v" ] || { [ -n "$src" ] && v="${src#v}"; } || true
+          [ -n "$v" ] || v="${GITHUB_REF_NAME#v}"
+          echo "version=${v//\//-}" >> "$GITHUB_OUTPUT"
+      - name: Libraries' sources
+        run: |
+          mkdir -p ref
+          get() { curl -fsSL -o "ref/$1" "$2"; echo "$3  ref/$1" | sha256sum -c -; }
+          get ffmpeg-8.1.tar.xz https://ffmpeg.org/releases/ffmpeg-8.1.tar.xz b072aed6871998cce9b36e7774033105ca29e33632be5b6347f3206898e0756a
+          get SDL2-2.32.10.tar.gz https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz 5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165
+          get nv-codec-headers-n13.0.19.0.tar.gz https://github.com/FFmpeg/nv-codec-headers/archive/refs/tags/n13.0.19.0.tar.gz 86d15d1a7c0ac73a0eafdfc57bebfeba7da8264595bf531cf4d8db1c22940116
+          get libva-2.24.1.tar.gz https://github.com/intel/libva/archive/refs/tags/2.24.1.tar.gz 0b4a3649ee8d683b9cce2ef094df4fb039d276c0cef7e49337c43d3b297b9f42
+      - name: Portable viewer
+        run: JOBS=4 bash tools/raw-recv/build-linux-portable.sh "${{ steps.v.outputs.version }}"
+      - name: AppImage
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          APPIMAGE_EXTRACT_AND_RUN=1 APPIMAGETOOL="$RUNNER_TEMP/appimagetool" bash tools/raw-recv/build-appimage.sh "${{ steps.v.outputs.version }}"
+          # it starts and finds what it needs (no display here: --check prints and exits)
+          APPIMAGE_EXTRACT_AND_RUN=1 timeout 60 "dist/switch-frame-tap-${{ steps.v.outputs.version }}-linux-x86_64.AppImage" --check || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: viewer-linux-appimage
+          path: dist/switch-frame-tap-*-linux-x86_64.AppImage
+
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Source
+        id: v
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          src="${{ inputs.source }}"
+          if [ -n "$src" ]; then
+            mkdir -p "$RUNNER_TEMP/pkg"
+            cp flatpak/ci_manifest.py "$RUNNER_TEMP/pkg/"
+            git checkout --force "$src"
+            cp "$RUNNER_TEMP/pkg/ci_manifest.py" flatpak/
+          fi
+          v="${{ inputs.version }}"
+          [ -n "$v" ] || { [ -n "$src" ] && v="${src#v}"; } || true
+          [ -n "$v" ] || v="${GITHUB_REF_NAME#v}"
+          v="${v//\//-}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          python3 flatpak/ci_manifest.py "$v" > flatpak/ci.yaml
+      # the runtime (org.freedesktop.Platform, the manifest's version) comes from Flathub
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: flatpak/ci.yaml
+          bundle: switch-frame-tap-${{ steps.v.outputs.version }}-linux.flatpak
+          cache-key: flatpak-builder-${{ hashFiles('flatpak/io.github.TomasUribe.SwitchFrameTap.yaml') }}
+          upload-artifact: true

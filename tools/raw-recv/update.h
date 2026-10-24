@@ -73,7 +73,8 @@ static const char *upd_asset_suffix(void)
 #elif defined(__APPLE__)
     return "-macos-x86_64.zip";
 #elif defined(__linux__) && defined(__x86_64__)
-    return "-linux.tar.gz";
+    /* v0.7.17: an AppImage updates to the release's AppImage */
+    return getenv("APPIMAGE") ? "-linux-x86_64.AppImage" : "-linux.tar.gz";
 #else
     return NULL;
 #endif
@@ -343,6 +344,27 @@ static int upd_get_main(void *arg)
     if (rename(g_upd_self, old) != 0 || rename(next, g_upd_self) != 0) { upd_fail(1, "The app could not be replaced"); return 0; }
     upd_run(rmo);
 #else
+    /* v0.7.17: an AppImage - the download is the new AppImage itself, put in
+     * place of this one (renaming over a running AppImage is fine: it stays
+     * mounted until it exits) */
+    if (getenv("APPIMAGE")) {
+        char next[1100];
+        snprintf(next, sizeof(next), "%s.new", g_upd_self);
+        long n = 0;
+        char *data = upd_read(asset, &n);
+        FILE *f = data ? fopen(next, "wb") : NULL;
+        const int wrote = f && n > 0 && fwrite(data, 1, (size_t)n, f) == (size_t)n;
+        if (f) fclose(f);
+        free(data);
+        if (!wrote || chmod(next, 0755) != 0 || rename(next, g_upd_self) != 0) {
+            remove(next);
+            upd_fail(1, "The AppImage could not be replaced - is its folder writable?");
+            return 0;
+        }
+        upd_tmp_clean();
+        upd_set(UPD_READY);
+        return 0;
+    }
     mkdir(x, 0755);
     const char *tar[] = { "tar", "-xzf", asset, "-C", x, NULL };
     if (upd_run(tar) != 0) { upd_fail(1, "The download could not be unpacked"); return 0; }
@@ -450,13 +472,20 @@ static void upd_init(char **argv)
 #else
     struct stat st;
     if (stat("/.flatpak-info", &st) == 0) {
-        snprintf(g_upd.msg, sizeof(g_upd.msg), "Installed with Flatpak - it updates with its manifest");
+        snprintf(g_upd.msg, sizeof(g_upd.msg), "Installed with Flatpak - get the new .flatpak from the releases page");
         upd_set(UPD_UNSUPPORTED);
         return;
     }
-    const ssize_t n = readlink("/proc/self/exe", g_upd_self, sizeof(g_upd_self) - 1);
-    if (n <= 0) { snprintf(g_upd.msg, sizeof(g_upd.msg), "Could not find this program"); upd_set(UPD_UNSUPPORTED); return; }
-    g_upd_self[n] = 0;
+    /* v0.7.17: an AppImage runs from a read-only mount - the file to replace
+     * is the .AppImage itself */
+    const char *appimage = getenv("APPIMAGE");
+    if (appimage && appimage[0]) {
+        snprintf(g_upd_self, sizeof(g_upd_self), "%s", appimage);
+    } else {
+        const ssize_t n = readlink("/proc/self/exe", g_upd_self, sizeof(g_upd_self) - 1);
+        if (n <= 0) { snprintf(g_upd.msg, sizeof(g_upd.msg), "Could not find this program"); upd_set(UPD_UNSUPPORTED); return; }
+        g_upd_self[n] = 0;
+    }
     char next[1100];
     snprintf(next, sizeof(next), "%s.new", g_upd_self);
     remove(next);

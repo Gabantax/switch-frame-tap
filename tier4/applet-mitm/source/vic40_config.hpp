@@ -129,6 +129,14 @@ namespace ams::mitm::applet::vic {
      * 32/33/34 are consecutive: A8R8G8B8, A8B8G8R8, R8G8B8A8. The game's
      * swapchain buffers are A8B8G8R8 (NvColorFormat 0x0100532120). */
     constexpr u32 PIXFMT_A8R8G8B8 = 32;
+    /* v0.7.17: 16-bit RGB (open-gpu-doc vic_ceb6_types.h: T_B5G6R5 9,
+     * T_R5G6B5 10) - libnx's RGB565 framebuffer, NvColorFormat_R5G6B5
+     * (0x010A881210, DBI #42). Named the other way round from NvColorFormat,
+     * as the 32-bit ones are (NvColorFormat A8B8G8R8 reads as the VIC's
+     * A8R8G8B8): R5G6B5 is read as the VIC's B5G6R5. */
+    constexpr u32 PIXFMT_B5G6R5 = 9;
+    constexpr u32 PIXFMT_R5G6B5 = 10;
+    constexpr bool Is16Bit(u32 fmt) { return fmt == PIXFMT_B5G6R5 || fmt == PIXFMT_R5G6B5; }
     constexpr u32 PIXFMT_A8B8G8R8 = 33;
     constexpr u32 PIXFMT_R8G8B8A8 = 34;
     /* NV12 - semi-planar Y + interleaved UV at half resolution in both axes.

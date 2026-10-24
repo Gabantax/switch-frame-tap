@@ -1940,11 +1940,14 @@ namespace ams::mitm::applet {
         surf.nvmap_id     = static_cast<u32>(gb->nvmap_id);
         surf.width        = p0->width;
         surf.height       = p0->height;
-        surf.stride_px    = p0->pitch / 4;
+        /* v0.7.17: a 16-bit RGB565 surface (libnx's framebuffer: DBI, #42) has
+         * 2 bytes a pixel - its stride was taken as half its width */
+        const bool rgb565 = p0->color_format == 0x010A881210ULL;
+        surf.stride_px    = p0->pitch / (rgb565 ? 2 : 4);
         surf.block_h_log2 = p0->block_height_log2;
         /* NvColorFormat -> VIC pixel format. A8B8G8R8 is the swapchain default. */
-        surf.pix_format   = (p0->color_format == 0x0100D12120ULL)
-                                    ? vic::PIXFMT_A8R8G8B8 : vic::PIXFMT_A8B8G8R8;
+        surf.pix_format   = rgb565 ? vic::PIXFMT_B5G6R5
+                          : (p0->color_format == 0x0100D12120ULL) ? vic::PIXFMT_A8R8G8B8 : vic::PIXFMT_A8B8G8R8;
         surf.armed        = true;
 
         LogLine("   captured %s slot %u: nvmap=%u %ux%u stride_px=%u blk_h_log2=%u off=0x%x pixfmt=%u (slots=%u)",
@@ -6467,14 +6470,16 @@ namespace ams::mitm::applet {
                 /* v0.1.1b: NvColorFormat A8R8G8B8 (0x100d12120) is B, G, R, A in
                  * memory - the VIC's A8B8G8R8, the other way round */
                 const bool bgra = g.color_format == 0x100d12120ull;
+                /* v0.7.17: libnx's RGB565 framebuffer (DBI, #42): read as 32-bit, the picture came out garbled */
+                const bool rgb565 = g.color_format == 0x10a881210ull;
                 const bool known_fmt = g.color_format == 0x100532120ull || bgra;
                 src = SrcDesc{ g.width, g.height, g.stride_px, vic::BLK_KIND_GENERIC_16Bx2, g.block_h_log2,
-                               bgra ? vic::PIXFMT_A8B8G8R8 : vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
+                               rgb565 ? vic::PIXFMT_B5G6R5 : bgra ? vic::PIXFMT_A8B8G8R8 : vic::PIXFMT_A8R8G8B8, vic::CACHE_WIDTH_64Bx4, g.width, g.height };
                 mk8_layout = g.width == 1920 && g.height == 1080 && g.stride_px == 1920 && g.block_h_log2 == 4;
                 size_check_ok = g.width == 1920 && g.height == 1080 && g.stride_px >= 1920 && g.block_h_log2 <= 5;
                 LogLine("   %s: game swapchain %ux%u stride %u px, block height 2^%u, %u slot(s) of %u B, format %#llx%s",
                         who, g.width, g.height, g.stride_px, g.block_h_log2, nslots, buf_bytes,
-                        static_cast<unsigned long long>(g.color_format), known_fmt ? "" : " (not MK8's - colours unverified)");
+                        static_cast<unsigned long long>(g.color_format), known_fmt ? "" : rgb565 ? " (16-bit RGB565)" : " (not MK8's - colours unverified)");
                 return true;
             }
 
@@ -7352,6 +7357,8 @@ namespace ams::mitm::applet {
         /* what the session just read into g_ind_buf: the handheld corner, or
          * the whole surface */
         bool ShotFromSession(const NvfSession &s) {
+            /* v0.7.17: the PNG writer reads 4 bytes a pixel - not a 16-bit picture */
+            if (vic::Is16Bit(s.src.pixfmt)) { LogLine("shot: a 16-bit picture - no screenshot from the stream"); return false; }
             const u32 shown = s.size_check_ok ? (s.src.w << 16 | s.src.h) : NvfSession::PresentRect(s.src, s.cap_crop);   /* v0.7.13: what the game shows */
             u32 w = s.corner ? NvfW : shown >> 16, h = s.corner ? NvfH : shown & 0xFFFF;
             if (s.size_check_ok) {          /* v0.7.15: dynamic resolution - only the presented part */

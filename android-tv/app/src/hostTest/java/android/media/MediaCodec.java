@@ -11,7 +11,7 @@ public final class MediaCodec {
     public static final int BUFFER_FLAG_CODEC_CONFIG=2, BUFFER_FLAG_END_OF_STREAM=4;
     public static volatile int inputDelayMs, outputDelayMs;
     public static volatile boolean rewritePts, stallHardware;
-    public static final AtomicInteger created=new AtomicInteger();
+    public static final AtomicInteger created=new AtomicInteger(), flushed=new AtomicInteger();
     private final boolean hardware;
     private final ArrayDeque<Output> outputs=new ArrayDeque<>();
     private final ByteBuffer input=ByteBuffer.allocate(8*1024*1024);
@@ -42,7 +42,8 @@ public final class MediaCodec {
     }
     public void releaseOutputBuffer(int index,boolean render) { }
     public void releaseOutputBuffer(int index,long timestampNs) { }
+    public void flush() { outputs.clear(); flushed.incrementAndGet(); }
     public void stop() { }
     public void release() { outputs.clear(); }
-    public static void reset() { inputDelayMs=outputDelayMs=0; rewritePts=stallHardware=false; created.set(0); }
+    public static void reset() { inputDelayMs=outputDelayMs=0; rewritePts=stallHardware=false; created.set(0); flushed.set(0); }
 }

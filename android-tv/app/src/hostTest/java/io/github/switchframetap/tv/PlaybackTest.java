@@ -11,13 +11,16 @@ public final class PlaybackTest {
     private static void require(boolean condition,String message) {
         if (!condition) throw new AssertionError(message);
     }
-    private static StreamStats video(int frames) throws Exception {
+    private static StreamStats video(int frames) throws Exception { return video(frames,-1); }
+    /** gapAt >= 0: the sequence numbers jump there (a lost packet or a queue reset) */
+    private static StreamStats video(int frames,int gapAt) throws Exception {
         VideoQueue queue=new VideoQueue(); StreamStats stats=new StreamStats();
         VideoDecoder decoder=new VideoDecoder(new Surface(),queue,stats,s -> { });
         decoder.start();
         try {
             for (int i=0;i<frames;i++) {
-                queue.offer(new SftProtocol.Packet(6,1280,720,i,20000,frame,System.nanoTime()));
+                int seq=gapAt>=0&&i>=gapAt?i+5:i;
+                queue.offer(new SftProtocol.Packet(6,1280,720,seq,20000,frame,System.nanoTime()));
                 Thread.sleep(33);
             }
             Thread.sleep(250);
@@ -44,6 +47,19 @@ public final class PlaybackTest {
         require(pts.rendered>0&&pts.unmatchedPts>0,"rewritten timestamps must not discard all Surface outputs");
         require(pts.decoderMs>=120,"driver latency >120 ms must not produce a black screen");
         System.out.println("PASS: rewritten PTS and 180 ms decoder output");
+        // v0.7.15 (#27, #32): a gap at the same size flushes the decoder - recreating it on a TV
+        // took long enough to overrun the queue again, ~1 frame shown per keyframe
+        MediaCodec.reset(); MediaCodec.inputDelayMs=60;
+        StreamStats gap=video(12,6);
+        require(MediaCodec.created.get()==1,"a gap at the same size must not recreate the decoder");
+        require(MediaCodec.flushed.get()>=1&&gap.rendered>6,"a gap must flush the decoder and keep rendering");
+        System.out.println("PASS: a gap flushes the decoder instead of recreating it");
+        VideoQueue asks=new VideoQueue();
+        require(asks.takeKeyRequest()&&!asks.takeKeyRequest(),"a keyframe is asked for once at connect");
+        asks.offer(new SftProtocol.Packet(6,1280,720,0,20000,frame,System.nanoTime()));
+        asks.offer(new SftProtocol.Packet(6,1280,720,7,20000,frame,System.nanoTime()));
+        require(asks.takeKeyRequest(),"a reset asks the console for a keyframe");
+        System.out.println("PASS: keyframe requests at connect and after a reset");
         MediaCodec.reset(); MediaCodec.stallHardware=true;
         StreamStats fallback=video(65);
         require(fallback.decoderErrors>0&&fallback.decoder.contains("software")&&fallback.rendered>0,

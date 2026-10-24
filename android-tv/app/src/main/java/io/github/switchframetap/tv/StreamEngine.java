@@ -75,6 +75,7 @@ final class StreamEngine {
                     video = new VideoDecoder(surface, queue, stats, this::status); decoder = video; video.start();
                     if (stopped) break;
                     status("Connected. Open a game on the Switch…");
+                    long keyAskedNs = 0;
                     while (!stopped) {
                         SftProtocol.Packet packet = SftProtocol.readPacket(connected, () -> stopped);
                         stats.bytes += packet.data.length + 32;
@@ -88,6 +89,9 @@ final class StreamEngine {
                         else {
                             stats.received++; stats.lastVideoNs = packet.receivedNs;
                             queue.offer(packet);
+                            if (queue.takeKeyRequest() && packet.receivedNs - keyAskedNs > 300_000_000L) {
+                                connected.requestKeyframe(); keyAskedNs = packet.receivedNs;
+                            }
                             stats.videoResets = queue.resets();
                             stats.videoDropped = queue.dropped();
                             // Video IDR recovery must not repeatedly flush the audio sink.

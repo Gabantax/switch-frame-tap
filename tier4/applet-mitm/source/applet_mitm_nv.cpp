@@ -2012,11 +2012,11 @@ namespace ams::mitm::applet {
                 if (!hold && !AppletBusy(std::addressof(mb))) { break; }
                 if (TakeShotRequest()) {
                     LogLine("shot: an applet holds the Applet pool (%llu MB) - no screenshot now", static_cast<unsigned long long>(mb));
-                    NotifyShot("No screenshot while a manual, news or the eShop is open");
+                    NotifyShot(KeyboardHoldsStream() ? "No screenshot while the keyboard is open" : "No screenshot while a manual, the eShop or another applet is open");
                 }
                 if (!said_busy) { LogLine("   engines: %s - waiting for it to close", hold ? "an applet is starting" : "an applet holds the Applet pool"); said_busy = true; }
                 VicStage("vb:applet_busy");
-                SetViewerReason(ViewerReason_AppletOpen);
+                SetViewerReason(KeyboardHoldsStream() ? ViewerReason_Keyboard : ViewerReason_AppletOpen);
                 os::SleepThread(TimeSpan::FromSeconds(2));
             }
             g_applet_needs_memory.store(false, std::memory_order_relaxed);
@@ -7472,7 +7472,7 @@ namespace ams::mitm::applet {
                 u64 rn = 0; u32 sg = 0;
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 if (live && !g_stream_enabled.load(std::memory_order_relaxed)) { why = "turned off from the overlay"; end = StreamEnd::Disabled; break; }
-                if (live && g_applet_needs_memory.load(std::memory_order_relaxed)) { why = "an applet (manual, news, eShop) needs the memory"; end = StreamEnd::Disabled; break; }
+                if (live && g_applet_needs_memory.load(std::memory_order_relaxed)) { why = "an applet needs the memory"; end = StreamEnd::Disabled; break; }
                 if (live && g_reconfig_request.exchange(false, std::memory_order_relaxed)) { why = "new settings from the manager app"; end = StreamEnd::Reconfigure; break; }
                 if (live && g_app_excluded.load(std::memory_order_relaxed)) { why = "this app was excluded"; end = StreamEnd::Disabled; break; }
                 if (live && (i & 7) == 0 && UsbViewerSaidBye()) { why = "the viewer closed"; end = StreamEnd::ViewerGone; break; }   /* v0.7.12 */

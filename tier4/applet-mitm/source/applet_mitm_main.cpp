@@ -541,6 +541,11 @@ namespace ams {
                     mitm::applet::UiProbeStep();   /* v0.7.14 research: off without probe-ui.txt */
                     ScreenFollowStream();
                 }
+                /* v0.7.15 (#33): no breadcrumb while a stream runs - its SD
+                 * writes every 3 s showed as a latency spike in the viewer
+                 * (vbezniskotempo measured it gone without them) */
+                if (mitm::applet::LogQuiet()) { continue; }
+                mitm::applet::LogFlushHeld();
                 char b[96];
                 const auto &st = mitm::applet::g_stats;
                 std::snprintf(b, sizeof(b), "hb:%u sess=%u getdisp=%u relay=%u txn=%u vic=%s",
@@ -1126,7 +1131,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.15-test4: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1424,7 +1429,7 @@ namespace ams::mitm::applet {
                 { "", "" },
                 { "Connected - no game is running", "Start a game and the picture appears here." },
                 { "Connected - the game is not on screen", "The HOME menu and system screens can't be streamed. Go back to the game." },
-                { "Paused - a manual, news or the eShop is open", "The stream comes back a few seconds after you close it." },
+                { "Paused - a manual, the eShop or another applet is open", "The stream comes back a few seconds after you close it." },
                 { "Streaming is turned off", "Turn it on in the Switch Frame Tap overlay or manager app." },
                 { "This app is excluded from streaming", "Remove it from the excluded apps in the manager app." },
                 { "This firmware is untested", "Set allow_untested_firmware = 1 in config.ini to stream anyway." },
@@ -1432,6 +1437,7 @@ namespace ams::mitm::applet {
                 { "Not enough memory to stream right now", "It tries again every few seconds." },
                 { "This game's picture was not found", "Restart the game. If it keeps happening, please send the log." },
                 { "Starting the stream...", "" },
+                { "Paused - the keyboard is open", "There is no memory left to stream while it is open. The stream comes back when you close it." },
             };
             if (reason >= sizeof(text) / sizeof(text[0])) { return; }
             alignas(0x1000) static u8 hdr_buf[0x1000];

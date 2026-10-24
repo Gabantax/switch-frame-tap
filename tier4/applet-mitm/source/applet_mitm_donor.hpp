@@ -47,6 +47,10 @@ namespace ams::mitm::applet {
     /* v0.7.16: a web applet (browser, eShop, manuals, OfflineWeb) is running */
     bool WebAppletOpen();
     bool AppletHoldActive();
+    /* Present stall alone is not HOME (loads pause queueBuffer too). Detach when
+     * HOME was pressed (stall >= 50 ms), or stall >= probe_ms with Album /
+     * applet confirm, or stall >= fallback_ms. out_reason may be null. */
+    bool HomeDetachShouldFire(u64 stall_age_ms, u32 probe_ms, u32 fallback_ms, const char **out_reason);
 
     /* sftap commands 10 / 11, from the donor */
     void DonorAccept(u64 size, os::NativeHandle tmem);

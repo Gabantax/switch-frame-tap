@@ -1,6 +1,7 @@
 #include "applet_mitm_donor.hpp"
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
+#include "applet_mitm_shot.hpp"
 #include "applet_mitm_service.hpp"
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_uisource.hpp"
@@ -510,6 +511,52 @@ namespace ams::mitm::applet {
         LogLine("donor: the Applet pool has room again (%llu MB free beside our %llu) - the full %u MB for a 1080p picture",
                 static_cast<unsigned long long>(free_mb), static_cast<unsigned long long>(ours_mb), FullDonorMb);
         return true;
+    bool HomeDetachShouldFire(u64 stall_age_ms, u32 probe_ms, u32 fallback_ms, const char **out_reason) {
+        if (probe_ms < 50) { probe_ms = 50; }
+        if (fallback_ms < probe_ms) { fallback_ms = probe_ms; }
+
+        /* Explicit HOME button (hid shm) - snappy path. Need a tiny present
+         * gap so we do not tear down mid-frame; loads never press HOME. */
+        if (HomeButtonRecent(3000) && stall_age_ms >= 50) {
+            if (out_reason != nullptr) { *out_reason = "HOME button"; }
+            return true;
+        }
+
+        if (stall_age_ms < probe_ms) { return false; }
+
+        if (g_applet_needs_memory.load(std::memory_order_relaxed)) {
+            if (out_reason != nullptr) { *out_reason = "applet needs memory"; }
+            return true;
+        }
+        /* review (v0.7.18): the stream loop asks on every pass while a game
+         * draws nothing - pm is asked at most every 100 ms. Not AppletBusy():
+         * Super Mario 3D All-Stars keeps OfflineWeb open the whole game, the
+         * pool always looked busy, and every loading pause would end the
+         * session again (what #38 fixed); the pool watch catches an applet that
+         * really needs the memory (g_applet_needs_memory, above). */
+        static u64 s_asked_ns = 0;
+        static bool s_hold = false, s_album = false;
+        const u64 now = armTicksToNs(armGetSystemTick());
+        if (now - s_asked_ns >= UINT64_C(100000000)) {
+            s_asked_ns = now;
+            s_hold = AppletHoldActive();
+            /* Stock Album / SwitchU replace qlaunch as 010000000000100D (HBL too). */
+            s_album = Running(0x010000000000100Dull);
+        }
+        if (s_hold) {
+            if (out_reason != nullptr) { *out_reason = "applet hold active"; }
+            return true;
+        }
+        if (s_album) {
+            if (out_reason != nullptr) { *out_reason = "Album/SwitchU 100D up"; }
+            return true;
+        }
+        /* Stock HOME with no Album yet / HOME shm dead: wait out load gaps */
+        if (stall_age_ms >= fallback_ms) {
+            if (out_reason != nullptr) { *out_reason = "present stall fallback"; }
+            return true;
+        }
+        return false;
     }
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {

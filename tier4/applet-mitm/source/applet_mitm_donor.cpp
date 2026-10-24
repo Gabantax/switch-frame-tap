@@ -89,10 +89,14 @@ namespace ams::mitm::applet {
          *  - the Album (photoViewer - not the homebrew menu in its place) holds
          *    a constant 324 MB for its whole session (the pool at 421 MB with
          *    HOME in every 22.5 run and on 23.0.1), 46 MB left;
-         *  - System Settings (0x100E) holds 316 MB (413 MB with HOME on 23.0.1,
-         *    412 on 22.5), 54 MB left. It opens other applets (the keyboard,
-         *    connection tests, web pages) - web ones are held by the systemWeb
-         *    hook; any new process beside it stops the stream at once (below).
+         *  - System Settings adds 316 MB (the pool at 413 MB with HOME on 23.0.1,
+         *    412 on 22.5), 54 MB left. On a retail console it is the HOME menu
+         *    itself: the set applet (0x100E) is not on retail (switchbrew), and
+         *    no thread was created when it opened (test2: the Applet group's
+         *    threads stayed at 30) - qlaunch grows by the 316 MB. It opens
+         *    other applets (the keyboard, connection tests, web pages) - web
+         *    ones are held by the systemWeb hook; any new process beside it
+         *    stops the stream at once (below).
          * Each has a margin kept free when the donor is taken, and a smaller
          * one under which the stream stops, so a MB of drift never makes it
          * stop and start again (logs/v0715-album-fw23, logs/v0715-test1). */
@@ -119,6 +123,22 @@ namespace ams::mitm::applet {
             return !st.IsHbl();
         }
 
+        /* the HOME menu's own memory: idle it is part of the 97 MB the Applet
+         * group holds; with System Settings open it holds 316 MB more */
+        constexpr u64 HomeWithSettingsMb = 200;
+        u64 HomeMenuMb() {
+            os::ProcessId pid{};
+            if (!Running(0x0100000000001000ull, std::addressof(pid))) { return 0; }
+            os::NativeHandle h = os::InvalidNativeHandle;
+            ncm::ProgramLocation loc = {};
+            cfg::OverrideStatus st = {};
+            if (R_FAILED(::ams::pm::dmnt::AtmosphereGetProcessInfo(std::addressof(h), std::addressof(loc), std::addressof(st), pid))) { return 0; }
+            u64 used = 0;
+            const bool ok = R_SUCCEEDED(::svcGetInfo(&used, InfoType_UsedMemorySize, h, 0));
+            os::CloseNativeHandle(h);
+            return ok ? used >> 20 : 0;
+        }
+
         /* what is open beside the stream: asked of pm only when the usual
          * margin is in the way, and once per pool size (the watch looks every
          * 20 ms, and the pool does not move while an applet just sits open) */
@@ -129,7 +149,13 @@ namespace ams::mitm::applet {
             /* the pool back near idle: the applet closed - ask again next time */
             if (free_mb >= TightMb + FullDonorMb) { s_free.store(~u64(0), std::memory_order_relaxed); return BesideOther; }
             if (s_free.load(std::memory_order_relaxed) != free_mb) {
-                s_kind.store(RealAlbumRunning() ? 1 : Running(0x010000000000100Eull) ? 2 : 0, std::memory_order_relaxed);
+                const u64 home_mb = HomeMenuMb();
+                const int kind = RealAlbumRunning() ? 1 : home_mb >= HomeWithSettingsMb ? 2 : 0;
+                if (s_kind.exchange(kind, std::memory_order_relaxed) != kind || s_free.load(std::memory_order_relaxed) == ~u64(0)) {
+                    LogLine("donor: %llu MB free in the Applet pool - %s (the HOME menu holds %llu MB)", static_cast<unsigned long long>(free_mb),
+                            kind == 1 ? "the Album is open" : kind == 2 ? "System Settings is open" : "no Album or System Settings",
+                            static_cast<unsigned long long>(home_mb));
+                }
                 s_free.store(free_mb, std::memory_order_relaxed);
             }
             const int k = s_kind.load(std::memory_order_relaxed);

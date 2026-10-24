@@ -5950,6 +5950,16 @@ namespace ams::mitm::applet {
          * corner, so slot-to-slot it looked like moving content and the 720p
          * stream went straight back to 1080p (Run v078-1, MK8). Every 15
          * frames had only worked because 15 is a multiple of 3 slots. */
+        /* v0.7.18: "an unchanging old picture outside the corner" is how a game
+         * that keeps its 1920x1080 buffers looks back in handheld (Mario Kart 8),
+         * but a still background there looks the same: Project Diva Mega Mix
+         * flipped 1080p -> 720p -> 1080p every 3-10 s in play (#43, ten restarts
+         * a minute). A stale switch undone by movement out there within 30 s
+         * marks the signal unreliable for that game until it exits; black
+         * outside the corner and the game's own crop still count. */
+        constinit u64 g_stale_switch_pid = 0, g_stale_switch_ns = 0;
+        constinit u64 g_stale_unreliable_pid = 0;
+
         struct SizeCheck {
             bool started_corner = false;
             u32 small_streak = 0, big_streak = 0, stale_streak = 0;
@@ -5995,6 +6005,7 @@ namespace ams::mitm::applet {
                 }
                 const ContentProbe pr = ProbeContent(dbg, addr, stride_px, bh_log2);
                 ContentProbe &prev = last[static_cast<u32>(slot) & 7];
+                const bool stale_ok = pid == 0 || g_stale_unreliable_pid != pid;   /* v0.7.18 */
                 s32 vote = -1;    /* 1: 720p (black outside), 2: 720p (old picture outside), 0: 1080p, -1: no evidence */
                 if (pr.ok) {
                     const bool moved_in  = prev.ok && pr.inside_hash != prev.inside_hash;
@@ -6003,7 +6014,7 @@ namespace ams::mitm::applet {
                     else if (pr.outside_black && pr.inside_black) { vote = -1; }
                     else if (pr.outside_black)                    { vote = 1; }
                     else if (moved_out)                           { vote = 0; }
-                    else if (moved_in)                            { vote = 2; }
+                    else if (moved_in && stale_ok)                { vote = 2; }
                 }
                 prev = pr;
                 /* 720p after 8 checks in a row (2 s), 1080p after 2 (0.5 s) */
@@ -6011,10 +6022,18 @@ namespace ams::mitm::applet {
                 stale_streak = vote == 2 ? stale_streak + 1 : 0;
                 big_streak   = vote == 0 ? big_streak + 1 : 0;
                 if (!started_corner && small_streak >= 8) {
+                    if (stale_streak != 0) { g_stale_switch_pid = pid; g_stale_switch_ns = now; }
                     return Switch(true, stale_streak != 0 ? "the game switched to a 720p picture (an unchanging old picture outside the corner)"
                                                           : "the game switched to a 720p picture (black outside the corner)");
                 }
-                if (started_corner && big_streak >= 2) { return Switch(false, "the game switched to a 1080p picture"); }
+                if (started_corner && big_streak >= 2) {
+                    /* v0.7.18: back to 1080p soon after a stale switch - that was a still background */
+                    if (pid != 0 && g_stale_switch_pid == pid && now - g_stale_switch_ns < UINT64_C(30000000000) && g_stale_unreliable_pid != pid) {
+                        g_stale_unreliable_pid = pid;
+                        LogLine("   nvstream: the picture outside the corner only stood still - this game is not taken for 720p by that again");
+                    }
+                    return Switch(false, "the game switched to a 1080p picture");
+                }
                 return nullptr;
             }
 

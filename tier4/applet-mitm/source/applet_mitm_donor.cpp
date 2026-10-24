@@ -83,6 +83,41 @@ namespace ams::mitm::applet {
         constexpr u32 MinDonorMb = 30, FullDonorMb = 42;
         constinit std::atomic<u32> g_cap_mb{FullDonorMb};
 
+        /* v0.7.15: firmware 23 made the Applet pool 33 MB smaller (500 ->
+         * 467 MB). The Album (photoViewer - not the homebrew menu in its
+         * place) holds a constant 324 MB for its whole session: on 22.5 the
+         * pool sat at 421 MB without us in every run (test6, test7,
+         * pre1-run1) and the stream went on with a 29 MB donor beside it. On
+         * 23.0.1 that leaves 46 MB, under the 48 MB margin, and the stream
+         * waited the whole time the Album was open (logs/v0715-album-fw23).
+         * Beside the Album a small margin is enough. */
+        constexpr u64 AlbumMarginMb = 12;
+
+        bool RealAlbumRunning() {
+            os::ProcessId pid{};
+            if (R_FAILED(::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{0x010000000000100Dull})) || pid.value == 0) { return false; }
+            os::NativeHandle h = os::InvalidNativeHandle;
+            ncm::ProgramLocation loc = {};
+            cfg::OverrideStatus st = {};
+            if (R_FAILED(::ams::pm::dmnt::AtmosphereGetProcessInfo(std::addressof(h), std::addressof(loc), std::addressof(st), pid))) { return false; }
+            os::CloseNativeHandle(h);
+            return !st.IsHbl();
+        }
+
+        /* the margin the pool keeps free beside what is open: asked of pm only
+         * when the usual one is in the way, and once per pool size (the watch
+         * looks every 20 ms, and the pool does not move while the Album is open) */
+        u64 MarginMb(u64 free_mb) {
+            if (free_mb >= TightMb + FullDonorMb) { return TightMb; }
+            static constinit std::atomic<u64> s_free{~u64(0)};
+            static constinit std::atomic<bool> s_album{false};
+            if (s_free.load(std::memory_order_relaxed) != free_mb) {
+                s_album.store(RealAlbumRunning(), std::memory_order_relaxed);
+                s_free.store(free_mb, std::memory_order_relaxed);
+            }
+            return s_album.load(std::memory_order_relaxed) ? AlbumMarginMb : TightMb;
+        }
+
         u64 AppletFreeMb() {
             u64 cur = 0, lim = 0;
             if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { return 0; }
@@ -192,7 +227,8 @@ namespace ams::mitm::applet {
                 /* the pool grew 32 MB since the last look: is it a web applet? */
                 static u64 checked_mb = 0;
                 if (mb < checked_mb) { checked_mb = mb; }
-                const bool tight = (lim >> 20) - mb < TightMb;
+                const u64 free_mb = (lim >> 20) - mb;
+                const bool tight = free_mb < TightMb && free_mb < MarginMb(free_mb);
                 bool web = false;
                 if (mb >= checked_mb + 32 || tight) { checked_mb = mb; web = WebAppletRunning(); }
                 const bool trigger = web || tight;
@@ -286,7 +322,8 @@ namespace ams::mitm::applet {
         if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { return false; }
         const u64 mb = cur >> 20;
         if (out_mb != nullptr) { *out_mb = mb; }
-        return WebAppletRunning() || (lim >> 20) - mb < MinDonorMb + TightMb;
+        const u64 free_mb = (lim >> 20) - mb;
+        return WebAppletRunning() || free_mb < MinDonorMb + MarginMb(free_mb);
     }
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
@@ -299,9 +336,13 @@ namespace ams::mitm::applet {
             u32 cap = FullDonorMb;
             {
                 const u64 free_mb = AppletFreeMb();
-                const u64 room = free_mb > TightMb ? free_mb - TightMb : 0;
+                const u64 margin = MarginMb(free_mb);
+                const u64 room = free_mb > margin ? free_mb - margin : 0;
                 cap = room >= FullDonorMb ? FullDonorMb : (room >= MinDonorMb ? static_cast<u32>(room) : MinDonorMb);
-                if (cap < FullDonorMb) { LogLine("donor: the Applet pool has %llu MB free - taking at most %u MB", static_cast<unsigned long long>(free_mb), cap); }
+                if (cap < FullDonorMb) {
+                    LogLine("donor: the Applet pool has %llu MB free - taking at most %u MB%s", static_cast<unsigned long long>(free_mb), cap,
+                            margin == AlbumMarginMb ? " (the Album is open: it keeps its size, so 12 MB are left beside it)" : "");
+                }
             }
             g_cap_mb.store(cap, std::memory_order_relaxed);
             {

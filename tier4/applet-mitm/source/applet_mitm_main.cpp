@@ -541,6 +541,11 @@ namespace ams {
                     mitm::applet::UiProbeStep();   /* v0.7.14 research: off without probe-ui.txt */
                     ScreenFollowStream();
                 }
+                /* v0.7.15 (#33): no breadcrumb while a stream runs - its SD
+                 * writes every 3 s showed as a latency spike in the viewer
+                 * (vbezniskotempo measured it gone without them) */
+                if (mitm::applet::LogQuiet()) { continue; }
+                mitm::applet::LogFlushHeld();
                 char b[96];
                 const auto &st = mitm::applet::g_stats;
                 std::snprintf(b, sizeof(b), "hb:%u sess=%u getdisp=%u relay=%u txn=%u vic=%s",
@@ -1126,7 +1131,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.14: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.15-test1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {

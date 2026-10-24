@@ -36,6 +36,13 @@ namespace ams::mitm::applet {
     /* v0.7.10: true holds lines (and breadcrumbs) in memory, false writes them
      * in one go - for a teardown that must not wait on the SD card */
     void LogDefer(bool on);
+    /* v0.7.15 (#33): true while a release install's stream runs - nothing is
+     * written to the SD card then; LogFlushHeld writes what was held once it
+     * has stopped (the heartbeat calls it) */
+    bool LogQuiet();
+    void LogFlushHeld();
+    /* whatever is held, written now - before a fatal */
+    void LogWriteHeldNow();
 
     /* v0.7.7: an abort that says why first - the line reaches the SD card
      * (every LogLine is flushed) before the console shows the fatal screen.
@@ -45,6 +52,7 @@ namespace ams::mitm::applet {
         if (R_FAILED(sft_abort_rc_)) {                                                                    \
             ::ams::mitm::applet::LogLine("FATAL: %s failed, rc=0x%x (%s:%d) - stopping the console here", \
                                          #expr, sft_abort_rc_.GetValue(), __FILE__, __LINE__);            \
+            ::ams::mitm::applet::LogWriteHeldNow();   /* even mid-stream (v0.7.15) */                   \
             R_ABORT_UNLESS(sft_abort_rc_);                                                                \
         }                                                                                                 \
     } while (0)

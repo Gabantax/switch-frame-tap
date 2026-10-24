@@ -17,6 +17,11 @@ on:
   push:
     tags: ['v*']
 
+# the containers' sh is dash; the steps use bash's ${v//...}
+defaults:
+  run:
+    shell: bash
+
 jobs:
   appimage:
     runs-on: ubuntu-latest

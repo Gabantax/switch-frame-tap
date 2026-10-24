@@ -84,18 +84,33 @@ namespace ams::mitm::applet {
         constinit std::atomic<u32> g_cap_mb{FullDonorMb};
 
         /* v0.7.15: firmware 23 made the Applet pool 33 MB smaller (500 ->
-         * 467 MB). The Album (photoViewer - not the homebrew menu in its
-         * place) holds a constant 324 MB for its whole session: on 22.5 the
-         * pool sat at 421 MB without us in every run (test6, test7,
-         * pre1-run1) and the stream went on with a 29 MB donor beside it. On
-         * 23.0.1 that leaves 46 MB, under the 48 MB margin, and the stream
-         * waited the whole time the Album was open (logs/v0715-album-fw23).
-         * Beside the Album a small margin is enough. */
-        constexpr u64 AlbumMarginMb = 12;
+         * 467 MB), and the applets kept their sizes, so beside the two big
+         * ones the 48 MB margin no longer leaves room for a donor:
+         *  - the Album (photoViewer - not the homebrew menu in its place) holds
+         *    a constant 324 MB for its whole session (the pool at 421 MB with
+         *    HOME in every 22.5 run and on 23.0.1), 46 MB left;
+         *  - System Settings (0x100E) holds 316 MB (413 MB with HOME on 23.0.1,
+         *    412 on 22.5), 54 MB left. It opens other applets (the keyboard,
+         *    connection tests, web pages) - web ones are held by the systemWeb
+         *    hook; any new process beside it stops the stream at once (below).
+         * Each has a margin kept free when the donor is taken, and a smaller
+         * one under which the stream stops, so a MB of drift never makes it
+         * stop and start again (logs/v0715-album-fw23, logs/v0715-test1). */
+        struct Beside { u64 take_mb, stop_mb; const char *what; };
+        constexpr Beside BesideOther    = { TightMb, TightMb, nullptr };
+        constexpr Beside BesideAlbum    = { 12, 8, "the Album" };
+        constexpr Beside BesideSettings = { 20, 14, "System Settings" };
+
+        bool Running(u64 program_id, os::ProcessId *out_pid = nullptr) {
+            os::ProcessId pid{};
+            if (R_FAILED(::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{program_id})) || pid.value == 0) { return false; }
+            if (out_pid != nullptr) { *out_pid = pid; }
+            return true;
+        }
 
         bool RealAlbumRunning() {
             os::ProcessId pid{};
-            if (R_FAILED(::ams::pm::dmnt::GetProcessId(std::addressof(pid), ncm::ProgramId{0x010000000000100Dull})) || pid.value == 0) { return false; }
+            if (!Running(0x010000000000100Dull, std::addressof(pid))) { return false; }
             os::NativeHandle h = os::InvalidNativeHandle;
             ncm::ProgramLocation loc = {};
             cfg::OverrideStatus st = {};
@@ -104,20 +119,38 @@ namespace ams::mitm::applet {
             return !st.IsHbl();
         }
 
-        /* the margin the pool keeps free beside what is open: asked of pm only
-         * when the usual one is in the way, and once per pool size (the watch
-         * looks every 20 ms, and the pool does not move while the Album is open) */
-        u64 MarginMb(u64 free_mb) {
-            if (free_mb >= TightMb + FullDonorMb) { return TightMb; }
-            static constinit std::atomic<u64> s_free{~u64(0)};
-            static constinit std::atomic<bool> s_album{false};
+        /* what is open beside the stream: asked of pm only when the usual
+         * margin is in the way, and once per pool size (the watch looks every
+         * 20 ms, and the pool does not move while an applet just sits open) */
+        constinit std::atomic<u64> g_beside_free{~u64(0)};
+        const Beside &BesideNow(u64 free_mb) {
+            static constinit std::atomic<u64> &s_free = g_beside_free;
+            static constinit std::atomic<int> s_kind{0};
+            /* the pool back near idle: the applet closed - ask again next time */
+            if (free_mb >= TightMb + FullDonorMb) { s_free.store(~u64(0), std::memory_order_relaxed); return BesideOther; }
             if (s_free.load(std::memory_order_relaxed) != free_mb) {
-                s_album.store(RealAlbumRunning(), std::memory_order_relaxed);
+                s_kind.store(RealAlbumRunning() ? 1 : Running(0x010000000000100Eull) ? 2 : 0, std::memory_order_relaxed);
                 s_free.store(free_mb, std::memory_order_relaxed);
             }
-            return s_album.load(std::memory_order_relaxed) ? AlbumMarginMb : TightMb;
+            const int k = s_kind.load(std::memory_order_relaxed);
+            return k == 1 ? BesideAlbum : k == 2 ? BesideSettings : BesideOther;
         }
 
+        /* beside a big applet the margin is small: a process created there
+         * (an applet it opens) stops the stream before it asks for memory -
+         * it shows in the process list while its code still loads */
+        constinit u64 g_beside_max_pid = 0;   /* 0: no baseline (not beside a big applet) */
+        bool NewProcessBeside(u64 donor_pid) {
+            u64 &s_max_pid = g_beside_max_pid;
+            u64 pids[96];
+            s32 n = 0;
+            if (R_FAILED(::svcGetProcessList(&n, pids, 96))) { return false; }
+            u64 top = 0;
+            for (s32 i = 0; i < n; ++i) { if (pids[i] != donor_pid && pids[i] > top) { top = pids[i]; } }
+            const bool fresh = s_max_pid != 0 && top > s_max_pid;
+            s_max_pid = top;
+            return fresh;
+        }
         u64 AppletFreeMb() {
             u64 cur = 0, lim = 0;
             if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { return 0; }
@@ -220,7 +253,7 @@ namespace ams::mitm::applet {
                     if (armTicksToNs(armGetSystemTick()) - g_trigger_ns > 3'000'000'000ull) { LogDefer(false); }
                     continue;
                 }
-                if (!g_mapped) { continue; }
+                if (!g_mapped) { g_beside_max_pid = 0; continue; }
                 u64 cur = 0, lim = 0;
                 if (R_FAILED(::ams::pm::dmnt::AtmosphereGetCurrentLimitInfo(std::addressof(cur), std::addressof(lim), ::ams::pm::ResourceLimitGroup_Applet, svc::LimitableResource_PhysicalMemoryMax))) { continue; }
                 const u64 mb = cur >> 20, donor_mb = g_size >> 20;
@@ -228,16 +261,20 @@ namespace ams::mitm::applet {
                 static u64 checked_mb = 0;
                 if (mb < checked_mb) { checked_mb = mb; }
                 const u64 free_mb = (lim >> 20) - mb;
-                const bool tight = free_mb < TightMb && free_mb < MarginMb(free_mb);
+                const Beside &beside = free_mb < TightMb ? BesideNow(free_mb) : BesideOther;
+                const bool tight = free_mb < beside.stop_mb;
+                if (beside.what == nullptr) { g_beside_max_pid = 0; }
+                const bool spawned = beside.what != nullptr && NewProcessBeside(g_pid);
                 bool web = false;
                 if (mb >= checked_mb + 32 || tight) { checked_mb = mb; web = WebAppletRunning(); }
-                const bool trigger = web || tight;
+                const bool trigger = web || tight || spawned;
                 if (trigger) {
                     LogDefer(true);   /* written once the memory is back (DonorRelease) */
                     g_trigger_ns = armTicksToNs(armGetSystemTick());
                     g_applet_needs_memory.store(true, std::memory_order_relaxed);
-                    LogLine("donor: an applet is starting (Applet group %llu MB, %llu of them ours) - stopping the stream to give the memory back",
-                            static_cast<unsigned long long>(mb), static_cast<unsigned long long>(donor_mb));
+                    LogLine("donor: an applet is starting (Applet group %llu MB, %llu of them ours%s%s) - stopping the stream to give the memory back",
+                            static_cast<unsigned long long>(mb), static_cast<unsigned long long>(donor_mb),
+                            spawned ? "; a new process beside " : "", spawned ? beside.what : "");
                 }
             }
         }
@@ -323,7 +360,7 @@ namespace ams::mitm::applet {
         const u64 mb = cur >> 20;
         if (out_mb != nullptr) { *out_mb = mb; }
         const u64 free_mb = (lim >> 20) - mb;
-        return WebAppletRunning() || free_mb < MinDonorMb + MarginMb(free_mb);
+        return WebAppletRunning() || free_mb < MinDonorMb + BesideNow(free_mb).take_mb;
     }
 
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
@@ -336,12 +373,17 @@ namespace ams::mitm::applet {
             u32 cap = FullDonorMb;
             {
                 const u64 free_mb = AppletFreeMb();
-                const u64 margin = MarginMb(free_mb);
-                const u64 room = free_mb > margin ? free_mb - margin : 0;
+                const Beside &beside = BesideNow(free_mb);
+                const u64 room = free_mb > beside.take_mb ? free_mb - beside.take_mb : 0;
                 cap = room >= FullDonorMb ? FullDonorMb : (room >= MinDonorMb ? static_cast<u32>(room) : MinDonorMb);
                 if (cap < FullDonorMb) {
-                    LogLine("donor: the Applet pool has %llu MB free - taking at most %u MB%s", static_cast<unsigned long long>(free_mb), cap,
-                            margin == AlbumMarginMb ? " (the Album is open: it keeps its size, so 12 MB are left beside it)" : "");
+                    if (beside.what != nullptr) {
+                        LogLine("donor: the Applet pool has %llu MB free - taking at most %u MB (%s is open: %llu MB are left beside it, the stream stops under %llu)",
+                                static_cast<unsigned long long>(free_mb), cap, beside.what,
+                                static_cast<unsigned long long>(beside.take_mb), static_cast<unsigned long long>(beside.stop_mb));
+                    } else {
+                        LogLine("donor: the Applet pool has %llu MB free - taking at most %u MB", static_cast<unsigned long long>(free_mb), cap);
+                    }
                 }
             }
             g_cap_mb.store(cap, std::memory_order_relaxed);

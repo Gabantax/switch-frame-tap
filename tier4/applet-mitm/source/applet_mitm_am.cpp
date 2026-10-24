@@ -107,6 +107,32 @@ namespace ams::mitm::applet {
         R_SUCCEED();
     }
 
+    constinit std::atomic<bool> g_hb_docked{false};
+
+    /* v0.7.18: homebrew (hbl) with homebrew_docked on gets the docked answers;
+     * anything else has its state getter go to am untouched */
+    Result AmProxyMitm::GetCommonStateGetter(sf::Out<sf::SharedPointer<IAmStateMitm>> out) {
+        if (!m_client_info.override_status.IsHbl() || !g_hb_docked.load(std::memory_order_relaxed)) {
+            R_THROW(sm::mitm::ResultShouldForwardToSession());
+        }
+        ::Service getter = {};
+        R_TRY(serviceDispatch(m_forward_service.get(), 0,
+            .out_num_objects = 1,
+            .out_objects     = std::addressof(getter),
+        ));
+        const sf::cmif::DomainObjectId target{serviceGetObjectId(std::addressof(getter))};
+        auto fwd = MakeForward(getter);
+        PendForward(fwd);
+        out.SetValue(sf::CreateSharedObjectEmplaced<IAmStateMitm, AmStateMitm>(decltype(fwd)(fwd), m_client_info), target);
+        LogLine("am: homebrew in program %016llx is told the console is docked (1920x1080)", static_cast<unsigned long long>(m_client_info.program_id.value));
+        R_SUCCEED();
+    }
+
+    /* AppletOperationMode_Console, ApmPerformanceMode_Boost, the TV's 1080p */
+    Result AmStateMitm::GetOperationMode(sf::Out<u8> out) { out.SetValue(1); R_SUCCEED(); }
+    Result AmStateMitm::GetPerformanceMode(sf::Out<u32> out) { out.SetValue(1); R_SUCCEED(); }
+    Result AmStateMitm::GetDefaultDisplayResolution(sf::Out<s32> out_w, sf::Out<s32> out_h) { out_w.SetValue(1920); out_h.SetValue(1080); R_SUCCEED(); }
+
     Result AmProxyMitm::GetLibraryAppletCreator(sf::Out<sf::SharedPointer<IAmCreatorMitm>> out) {
         ::Service creator = {};
         R_TRY(serviceDispatch(m_forward_service.get(), 11,

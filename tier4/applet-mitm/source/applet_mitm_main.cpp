@@ -690,6 +690,8 @@ namespace ams {
             /* (home_menu is read at boot only: the Album's dispdrv mitm and the
              * HOME menu's start are set up then) */
             g_screen_off.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "screenoff"), std::memory_order_relaxed);
+            /* v0.7.18: homebrew told the console is docked - the next one started */
+            mitm::applet::g_hb_docked.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "hbdocked"), std::memory_order_relaxed);
             mitm::applet::g_early_collect = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyoff") ? 0
                                           : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyab") ? 2 : 1;
         }
@@ -1324,6 +1326,9 @@ namespace ams {
         mitm::applet::LogLine("registered mitm server for vi:u");
         /* v0.7.10: the game's am, so a browser applet stops the stream first;
          * "noam" in config/arm leaves am alone (escape hatch) */
+        /* v0.7.18: before am's mitm: it decides which apps to wrap */
+        mitm::applet::g_hb_docked.store(ArmFileContains("hbdocked"), std::memory_order_relaxed);
+        if (mitm::applet::g_hb_docked.load()) { mitm::applet::LogLine("am: homebrew from the Homebrew Menu is told the console is docked (homebrew_docked)"); }
         if (ArmFileContains("noam")) { mitm::applet::LogLine("am: not wrapped (noam)"); } else { mitm::applet::StartAmMitm(); }
         /* v0.7.17: a game's audout:u - its own PCM for the stream when nothing else carries its sound (PokeMMO) */
         if (ArmFileContains("noaudout")) { mitm::applet::LogLine("audout: not wrapped (noaudout)"); } else { mitm::applet::StartAudOutMitm(); }

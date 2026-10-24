@@ -188,7 +188,7 @@ from here: ./switch-frame-tap-viewer --app
 
 KDE Plasma: the launcher uses Wayland natively; if the window ever freezes,
 run "switch-frame-tap-viewer --app" in a terminal to see the reason and the
-log in $XDG_STATE_HOME/switch-frame-tap/viewer.log. "switch-frame-tap-viewer
+log in ~/.local/state/switch-frame-tap/viewer.log. "switch-frame-tap-viewer
 --check" prints the session, video driver, audio driver, udev rule, USB
 devices and network status.
 

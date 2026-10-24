@@ -494,6 +494,24 @@ namespace ams::mitm::applet {
 
     bool KeyboardHoldsStream() { return !WebAppletRunning() && Running(0x0100000000001008ull); }
 
+    /* v0.7.18: beside the Album or System Settings the donor is taken smaller
+     * (29-33 MB), and it stayed that size until the engines closed for some
+     * other reason - a docked game then streamed at 720p (Smash after Settings,
+     * logs/v0716-pr38test2). Room for the full donor again: what is free plus
+     * ours, with the usual 48 MB left beside it, and no web applet. */
+    bool DonorCanGrow() {
+        if (!g_mapped || g_cap_mb.load(std::memory_order_relaxed) >= FullDonorMb) { return false; }
+        static u64 s_last_ns = 0;
+        const u64 now = armTicksToNs(armGetSystemTick());
+        if (s_last_ns != 0 && now - s_last_ns < UINT64_C(60000000000)) { return false; }
+        const u64 free_mb = AppletFreeMb(), ours_mb = g_size >> 20;
+        if (free_mb + ours_mb < TightMb + FullDonorMb || WebAppletRunning()) { return false; }
+        s_last_ns = now;
+        LogLine("donor: the Applet pool has room again (%llu MB free beside our %llu) - the full %u MB for a 1080p picture",
+                static_cast<unsigned long long>(free_mb), static_cast<unsigned long long>(ours_mb), FullDonorMb);
+        return true;
+    }
+
     bool DonorObtain(uintptr_t *out_addr, size_t *out_size) {
         g_donor_change_ns.store(armTicksToNs(armGetSystemTick()), std::memory_order_relaxed);   /* its heap comes before the map */
         std::scoped_lock lk(g_lock);

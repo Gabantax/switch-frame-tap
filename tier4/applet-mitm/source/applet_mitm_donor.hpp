@@ -26,6 +26,10 @@ namespace ams::mitm::applet {
      * the keyboard has its own message (beside System Settings it always
      * pauses the stream) */
     bool KeyboardHoldsStream();
+    /* v0.7.18: the donor was taken smaller (beside the Album or System
+     * Settings) and the Applet pool has room for the full one again - true at
+     * most once a minute, logged; the stream then sets up again on it */
+    bool DonorCanGrow();
 
     /* Set when an applet starts while the donor's memory is in use: the
      * stream stops and the memory goes back at once (the browser's big

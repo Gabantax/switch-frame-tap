@@ -17,6 +17,7 @@
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_donor.hpp"
 #include "applet_mitm_am.hpp"
+#include "applet_mitm_audout.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_nv.hpp"
 #include "applet_mitm_nvdrv.hpp"
@@ -1320,6 +1321,8 @@ namespace ams {
         /* v0.7.10: the game's am, so a browser applet stops the stream first;
          * "noam" in config/arm leaves am alone (escape hatch) */
         if (ArmFileContains("noam")) { mitm::applet::LogLine("am: not wrapped (noam)"); } else { mitm::applet::StartAmMitm(); }
+        /* v0.7.17: a game's audout:u - its own PCM for the stream when nothing else carries its sound (PokeMMO) */
+        if (ArmFileContains("noaudout")) { mitm::applet::LogLine("audout: not wrapped (noaudout)"); } else { mitm::applet::StartAudOutMitm(); }
         /* v0.1.1: after vi:u, and wrapping only the running application's own
          * sessions (ShouldMitm asks pm:dmnt) */
         /* v0.7.1: "nohb" (config homebrew = 0, not in the manager) leaves vi:m
@@ -1611,9 +1614,15 @@ namespace ams::mitm::applet {
         u32 got = 0;
         if (R_FAILED(usbDsEndpoint_GetReportData(ep, std::addressof(report))) ||
             R_FAILED(usbDsParseReportData(std::addressof(report), g_bye_urb, nullptr, std::addressof(got)))) { return false; }
+        /* v0.7.16: "SFTC" after the SFTK - this viewer draws crops itself */
+        for (u32 k = 4; k + 4 <= got && k + 4 <= sizeof(::ams::g_usb_ep_out_buf); k += 4) {
+            if (std::memcmp(::ams::g_usb_ep_out_buf + k, "SFTC", 4) == 0) { g_viewer_crop.store(true, std::memory_order_relaxed); }
+        }
         /* v0.7.13: "SFTK" - the viewer wants a keyframe (a new decoder, a recording) */
         if (got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTK", 4) == 0) { g_viewer_key_request.store(true, std::memory_order_relaxed); return false; }
-        return got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTQ", 4) == 0;
+        const bool bye = got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTQ", 4) == 0;
+        if (bye) { g_viewer_crop.store(false, std::memory_order_relaxed); }
+        return bye;
     }
 
     void UsbByeStop() {

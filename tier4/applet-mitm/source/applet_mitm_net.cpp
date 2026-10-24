@@ -216,8 +216,9 @@ namespace ams::mitm::applet {
                             if (std::memcmp(got + k, "SFTK", 4) == 0) {
                                 g_viewer_can_ask.store(true, std::memory_order_relaxed);
                                 g_viewer_key_request.store(true, std::memory_order_relaxed);
-                                break;
                             }
+                            /* v0.7.16: "SFTC" - it draws crops itself (header flags 32/64) */
+                            if (std::memcmp(got + k, "SFTC", 4) == 0) { g_viewer_crop.store(true, std::memory_order_relaxed); }
                         }
                     }
                     continue;
@@ -250,6 +251,7 @@ namespace ams::mitm::applet {
                  * otherwise Android / older PC viewers would only get keyframes
                  * every 240 frames on Wi-Fi. */
                 g_viewer_can_ask.store(false, std::memory_order_relaxed);
+                g_viewer_crop.store(false, std::memory_order_relaxed);   /* v0.7.16: until it sends SFTC */
                 g_viewer_key_request.store(true, std::memory_order_relaxed);
                 LogLine("net: auto keyframe for new viewer");
                 g_client = c;

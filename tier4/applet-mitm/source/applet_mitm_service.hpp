@@ -44,6 +44,7 @@ namespace ams::mitm::applet {
 
 /* ---- IHOSBinderDriver wrapper (innermost - declare first) -------------- */
 #define AMS_VI_BINDER_MITM_INTERFACE_INFO(C, H) \
+    AMS_SF_METHOD_INFO(C, H, 0, Result, TransactParcel,     (s32 session_id, u32 code, u32 flags, const sf::InBuffer &parcel_in, const sf::OutBuffer &parcel_out), (session_id, code, flags, parcel_in, parcel_out)) \
     AMS_SF_METHOD_INFO(C, H, 3, Result, TransactParcelAuto, (s32 session_id, u32 code, u32 flags, const sf::InAutoSelectBuffer &parcel_in, const sf::OutAutoSelectBuffer &parcel_out), (session_id, code, flags, parcel_in, parcel_out))
 
 AMS_SF_DEFINE_MITM_INTERFACE(ams::mitm::applet, IBinderMitm, AMS_VI_BINDER_MITM_INTERFACE_INFO, 0x2AB1E141)
@@ -96,7 +97,12 @@ namespace ams::mitm::applet {
             using MitmServiceImplBase::MitmServiceImplBase;
             static bool ShouldMitm(const sm::MitmProcessInfo &) { return true; }
         public:
+            /* v0.7.17: games built before firmware 3.0.0 (Fast RMX, #41) use command 0 */
+            Result TransactParcel(s32 session_id, u32 code, u32 flags, const sf::InBuffer &parcel_in, const sf::OutBuffer &parcel_out);
             Result TransactParcelAuto(s32 session_id, u32 code, u32 flags, const sf::InAutoSelectBuffer &parcel_in, const sf::OutAutoSelectBuffer &parcel_out);
+        private:
+            Result Transact(s32 session_id, u32 code, u32 flags, const void *in, size_t in_size, size_t out_size);
+        public:
     };
     static_assert(IsIBinderMitm<BinderMitm>);
 

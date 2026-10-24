@@ -180,17 +180,31 @@ namespace ams::mitm::applet {
     /* ---- IHOSBinderDriver: the frame pipeline -------------------------- */
 
     Result BinderMitm::TransactParcelAuto(s32 session_id, u32 code, u32 flags, const sf::InAutoSelectBuffer &parcel_in, const sf::OutAutoSelectBuffer &parcel_out) {
+        R_RETURN(this->Transact(session_id, code, flags, parcel_in.GetPointer(), parcel_in.GetSize(), parcel_out.GetSize()));
+    }
+
+    /* v0.7.17: the same transaction with map-alias buffers - what games built
+     * before firmware 3.0.0 send (TransactParcelAuto came with it). Fast RMX's
+     * presents all went through here, unseen: the stream sat on the HOME menu
+     * with "the game is not on screen" (#41). */
+    Result BinderMitm::TransactParcel(s32 session_id, u32 code, u32 flags, const sf::InBuffer &parcel_in, const sf::OutBuffer &parcel_out) {
+        static bool said = false;
+        if (!said) { said = true; LogLine("binder: program %016llx uses TransactParcel (command 0, before firmware 3.0.0)", static_cast<unsigned long long>(m_client_info.program_id.value)); }
+        R_RETURN(this->Transact(session_id, code, flags, parcel_in.GetPointer(), parcel_in.GetSize(), parcel_out.GetSize()));
+    }
+
+    Result BinderMitm::Transact(s32 session_id, u32 code, u32 flags, const void *in, size_t in_size, size_t out_size) {
         /* v0.7.14: Tesla's layer - its presents for the overlays, never the game's capture */
         if (m_client_info.program_id.value == TeslaProgramId) {
-            OvlNoteTeslaTransaction(code, parcel_in.GetPointer(), parcel_in.GetSize());
+            OvlNoteTeslaTransaction(code, in, in_size);
             R_RETURN(sm::mitm::ResultShouldForwardToSession());
         }
         /* v0.7.14 probe4: a library applet's relay - logged, never the game's capture */
         if (IsLibraryApplet(m_client_info.program_id.value)) {
-            UiNoteTransaction(m_client_info.program_id.value, session_id, code, parcel_in.GetPointer(), parcel_in.GetSize());
+            UiNoteTransaction(m_client_info.program_id.value, session_id, code, in, in_size);
             R_RETURN(sm::mitm::ResultShouldForwardToSession());
         }
-        GameBinderTransaction(m_client_info, session_id, code, flags, parcel_in.GetPointer(), parcel_in.GetSize(), parcel_out.GetSize());
+        GameBinderTransaction(m_client_info, session_id, code, flags, in, in_size, out_size);
         R_RETURN(sm::mitm::ResultShouldForwardToSession());
     }
 

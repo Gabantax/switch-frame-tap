@@ -805,7 +805,9 @@ namespace ams::mitm::applet {
          * "XXX". So it is swept below rather than guessed. */
         /* w/h describe the SURFACE; rect_w/rect_h the region actually sampled.
          * They differ only for the unscaled 1:1 control. */
-        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt, cache_w, rect_w, rect_h; };
+        /* rect_x/rect_y (v0.7.17): the sampled part's top-left - a centred crop
+         * scaled by the VIC (Kingdom Hearts' zooms, for viewers without SFTC) */
+        struct SrcDesc { u32 w, h, stride_px, blk_kind, blk_h_log2, pixfmt, cache_w, rect_w, rect_h; u32 rect_x = 0, rect_y = 0; };
 
         /* our own pitch-linear 64x64 buffer, stride 256 px like the destination */
         constexpr SrcDesc SelfSrc { DstW, DstH, DstStridePx, vic::BLK_KIND_PITCH, 0, vic::PIXFMT_A8B8G8R8, vic::CACHE_WIDTH_64Bx4, DstW, DstH };
@@ -1043,10 +1045,10 @@ namespace ams::mitm::applet {
             slot->CurrentFieldEnable  = 1;
             slot->PlanarAlpha         = 1023;
             slot->ConstantAlpha       = 1;
-            slot->SourceRectLeft      = 0;
-            slot->SourceRectRight     = static_cast<u64>(src.rect_w - 1) << 16;   /* 16.16 fixed point */
-            slot->SourceRectTop       = 0;
-            slot->SourceRectBottom    = static_cast<u64>(src.rect_h - 1) << 16;
+            slot->SourceRectLeft      = static_cast<u64>(src.rect_x) << 16;
+            slot->SourceRectRight     = static_cast<u64>(src.rect_x + src.rect_w - 1) << 16;   /* 16.16 fixed point */
+            slot->SourceRectTop       = static_cast<u64>(src.rect_y) << 16;
+            slot->SourceRectBottom    = static_cast<u64>(src.rect_y + src.rect_h - 1) << 16;
             slot->DestRectLeft        = 0;
             slot->DestRectRight       = out.w - 1;
             slot->DestRectTop         = 0;
@@ -6974,10 +6976,26 @@ namespace ams::mitm::applet {
              * rest of the slot is old picture (the glitch at the edges). The
              * whole surface is still converted 1:1; the viewer is told the
              * middle part (header bit 6 with the crop) and shows only that. */
-            void CropCentered(const SrcDesc &d, const OutDesc &out) {
-                if (dyn_vic || dyn_out != 0 || cap_crop_c == 0 || d.rect_w != d.w || d.rect_h != d.h) { return; }
+            void CropCentered(SrcDesc &d, const OutDesc &out) {
+                if (dyn_out != 0 || cap_crop_c == 0 || d.rect_w != d.w || d.rect_h != d.h) { return; }
                 const u32 cw = cap_crop_c >> 16, ch = cap_crop_c & 0xFFFF;
                 if (cw < 320 || ch < 180 || cw > d.w || ch > d.h) { return; }
+                /* v0.7.17: a viewer that does not draw crops (no SFTC - an older
+                 * viewer, the Android app, webcam mode): the VIC samples only the
+                 * middle part and scales it to the whole stream picture. Before,
+                 * the whole surface went out, old picture round the edges
+                 * (Kingdom Hearts II with an older viewer). */
+                if (dyn_vic) {
+                    if (cw >= d.w && ch >= d.h) { return; }
+                    if (center_frames++ == 0) {
+                        LogLine("   nvf: the game presents a part in the middle of its %ux%u picture (%ux%u) - the VIC scales that part to the stream", d.w, d.h, cw, ch);
+                    }
+                    d.rect_x = (d.w - cw) / 2;
+                    d.rect_y = (d.h - ch) / 2;
+                    d.rect_w = cw;
+                    d.rect_h = ch;
+                    return;
+                }
                 const u32 ow = static_cast<u32>(static_cast<u64>(cw) * out.w / d.w) & ~1u;
                 const u32 oh = static_cast<u32>(static_cast<u64>(ch) * out.h / d.h) & ~1u;
                 if (ow == 0 || oh == 0 || (ow >= out.w && oh >= out.h)) { return; }

@@ -1127,10 +1127,16 @@ static void key_send_pending(void)
     if (!SDL_AtomicCAS(&g_want_key, 1, 0)) return;
     /* v0.7.16: + "SFTC" - this viewer draws crops itself (SFT_FLAG_CROP); a
      * console only sends them to a viewer that said so. Older consoles read
-     * the first four bytes and ignore the rest. */
-    static const unsigned char msg[8] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'C' };
-    if (g_sock != SOCK_BAD) { send(g_sock, (const char *)msg, sizeof(msg), 0); }
-    else if (g_usb) { int n = 0; libusb_bulk_transfer(g_usb, SFT_EP_OUT, (unsigned char *)msg, sizeof(msg), &n, 20); }
+     * the first four bytes and ignore the rest.
+     * v0.7.17: + "SFTD" instead while recording - the MP4 gets the stream as
+     * it comes, and a crop drawn here never reached the file (Mario Galaxy's
+     * dynamic resolution: old picture beside the part it drew); the console
+     * crops the pictures itself meanwhile. */
+    static const unsigned char msg_crop[8] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'C' };
+    static const unsigned char msg_nocrop[8] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'D' };
+    const unsigned char *msg = rec_active() ? msg_nocrop : msg_crop;
+    if (g_sock != SOCK_BAD) { send(g_sock, (const char *)msg, sizeof(msg_crop), 0); }
+    else if (g_usb) { int n = 0; libusb_bulk_transfer(g_usb, SFT_EP_OUT, (unsigned char *)msg, sizeof(msg_crop), &n, 20); }
 }
 
 static int reader_main(void *arg)
@@ -1553,7 +1559,9 @@ static void act_fullscreen(SDL_Window *win)
 static void act_record(SDL_Window *win)
 {
     rec_toggle();
-    if (rec_active()) key_request();   /* v0.7.13: it starts at the next keyframe - now */
+    /* v0.7.13: it starts at the next keyframe - now. v0.7.17: and stopping
+     * says so too (SFTC again: the crops are drawn here once more) */
+    key_request();
     char t[256], rs[200];
     rec_status(rs, sizeof(rs));
     snprintf(t, sizeof(t), "Switch Frame Tap%s", rs[0] ? rs : "  |  recording stopped");

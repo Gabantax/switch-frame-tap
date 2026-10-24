@@ -1655,6 +1655,8 @@ namespace ams::mitm::applet {
         /* v0.7.16: "SFTC" after the SFTK - this viewer draws crops itself */
         for (u32 k = 4; k + 4 <= got && k + 4 <= sizeof(::ams::g_usb_ep_out_buf); k += 4) {
             if (std::memcmp(::ams::g_usb_ep_out_buf + k, "SFTC", 4) == 0) { g_viewer_crop.store(true, std::memory_order_relaxed); }
+            /* v0.7.17: "SFTD" - it records: the pictures cropped here, not in the viewer */
+            if (std::memcmp(::ams::g_usb_ep_out_buf + k, "SFTD", 4) == 0) { g_viewer_crop.store(false, std::memory_order_relaxed); }
         }
         /* v0.7.13: "SFTK" - the viewer wants a keyframe (a new decoder, a recording) */
         if (got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTK", 4) == 0) { g_viewer_key_request.store(true, std::memory_order_relaxed); return false; }

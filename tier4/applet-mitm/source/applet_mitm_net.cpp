@@ -219,6 +219,8 @@ namespace ams::mitm::applet {
                             }
                             /* v0.7.16: "SFTC" - it draws crops itself (header flags 32/64) */
                             if (std::memcmp(got + k, "SFTC", 4) == 0) { g_viewer_crop.store(true, std::memory_order_relaxed); }
+                            /* v0.7.17: "SFTD" - it records: the pictures cropped here, not in the viewer */
+                            if (std::memcmp(got + k, "SFTD", 4) == 0) { g_viewer_crop.store(false, std::memory_order_relaxed); }
                         }
                     }
                     continue;

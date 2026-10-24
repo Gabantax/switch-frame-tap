@@ -89,6 +89,12 @@ namespace {
         serviceDispatchIn(&g_sftap, 3, in);
     }
 
+    /* v0.7.18: the module reads config.ini again (sftap 2, as the app does after saving) */
+    void SftapReload() {
+        if (!SftapConnect()) { return; }
+        serviceDispatch(&g_sftap, 2);
+    }
+
     /* v0.7.12: screen off while streaming - now (sftap 4); config.ini keeps it */
     void SftapSetScreenOff(bool on) {
         if (!SftapConnect()) { return; }
@@ -339,6 +345,24 @@ namespace {
                 list->addItem(new tsl::elm::CustomDrawer([this](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
                     const char *note = !g_rnx_note.empty() ? g_rnx_note.c_str() : "1080p60 wants CPU 1785 MHz";
                     r->drawString(note, false, x + 15, y + 22, 16, r->a(tsl::style::color::ColorDescription));
+                }), 36);
+
+                /* v0.7.18: homebrew from the Homebrew Menu told the console is docked
+                 * (homebrew_docked) - from the next app started, no restart */
+                list->addItem(new tsl::elm::CategoryHeader("Homebrew (beta)"));
+                {
+                    std::string v;
+                    bool on = false;
+                    tsl::hlp::doWithSDCardHandle([&] { on = sftini::Get("homebrew_docked", &v) && v == "1"; });
+                    auto *hb = new tsl::elm::ToggleListItem("Docked mode (1080p)", on);
+                    hb->setStateChangedListener([](bool on) {
+                        tsl::hlp::doWithSDCardHandle([&] { sftini::Set("homebrew_docked", on ? "1" : "0"); });
+                        SftapReload();
+                    });
+                    list->addItem(hb);
+                }
+                list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
+                    r->drawString("From the next app started with R held over a game", false, x + 15, y + 22, 16, r->a(tsl::style::color::ColorDescription));
                 }), 36);
 
                 frame->setContent(list);

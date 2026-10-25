@@ -54,6 +54,15 @@ namespace ams::mitm::applet {
     /* v0.7.18: homebrew is told the console is docked (config homebrew_docked) */
     extern std::atomic<bool> g_hb_docked;
 
+    /* Homebrew that runs as an application: the Homebrew Menu over a game
+     * (hbl), or an installed homebrew title - a forwarder or an NSP - whose
+     * program id is outside Nintendo's application range (all 0100...;
+     * sphaira's forwarders are 05...). Forwarders with a 0100... id look like
+     * games and are not caught. v0.7.18.1: the forwarders. */
+    inline bool IsHomebrewApp(const sm::MitmProcessInfo &c) {
+        return c.override_status.IsHbl() || c.program_id.value > ncm::ApplicationId::End.value;
+    }
+
     class AmStateMitm : public sf::MitmServiceImplBase {
         public:
             using MitmServiceImplBase::MitmServiceImplBase;
@@ -88,9 +97,10 @@ namespace ams::mitm::applet {
         public:
             using MitmServiceImplBase::MitmServiceImplBase;
             static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
-                /* v0.7.18: the Homebrew Menu's apps too when they are to be told the console is docked */
-                return ncm::IsApplicationId(client_info.program_id) &&
-                       (!client_info.override_status.IsHbl() || g_hb_docked.load(std::memory_order_relaxed));
+                /* every game (a browser applet stops the stream first); homebrew
+                 * only when it is to be told the console is docked (v0.7.18) */
+                if (IsHomebrewApp(client_info)) { return g_hb_docked.load(std::memory_order_relaxed); }
+                return ncm::IsApplicationId(client_info.program_id);
             }
         public:
             Result OpenApplicationProxy(sf::Out<sf::SharedPointer<IAmProxyMitm>> out, const sf::ClientProcessId &client_pid, sf::CopyHandle &&process);

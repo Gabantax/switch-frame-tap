@@ -422,9 +422,11 @@ Expect more heat and battery drain, and some games dislike fake docked mode
 
 **Homebrew at 1080p (beta).** ReverseNX-RT is for official games. On the app's
 **Beta** page (or in the overlay), **Homebrew in docked mode** tells homebrew
-started by holding R over a game that the console is docked, so apps that pick
-their resolution from that (SDL2 ports, emulators) draw and stream at 1080p.
-Not from the Album: homebrew there has too little memory for 1080p.
+started by holding R over a game, or from a forwarder on the HOME menu, that
+the console is docked, so apps that pick their resolution from that (SDL2
+ports, emulators) draw and stream at 1080p. Not from the Album: homebrew there
+has too little memory for 1080p. Forwarders with a Nintendo-style title id
+(0100...) look like games and are left alone.
 
 ### The manager app
 
@@ -608,8 +610,8 @@ homebrew menu from the Album and the apps started from it - at the resolution
 the app draws (usually 1280x720).
 ReverseNX-RT cannot switch homebrew to docked mode (it works through the
 official SDK, which homebrew does not use); **Homebrew in docked mode** (beta,
-v0.7.18) does it for apps started by holding R over a game, and apps that pick
-their resolution from the mode then draw 1080p. Some apps refuse to run while a debugger is attached - the
+v0.7.18) does it for apps started by holding R over a game or from a forwarder,
+and apps that pick their resolution from the mode then draw 1080p. Some apps refuse to run while a debugger is attached - the
 stream reads frames that way - such as TiCo's protected builds: turn **Stream
 this app** off in the overlay while one is running and restart it; the
 sysmodule then never touches it (no stream, no screenshots). The manager's
@@ -672,8 +674,8 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
 - **Homebrew:** apps that run as applets (the homebrew menu from the Album)
   stream only with **Stream the HOME menu** on - otherwise use a forwarder or
   title override. Apps with anti-debug protection (TiCo) cannot be streamed;
-  exclude them. Docked mode for homebrew (beta) works only in title override,
-  not from the Album (too little memory there for 1080p).
+  exclude them. Docked mode for homebrew (beta) works in title override and
+  from forwarders, not from the Album (too little memory there for 1080p).
 - **The HOME menu** (opt-in): no sound outside games yet (the console's
   recorder only records games); a game's manual still pauses the stream.
 - **The overlays** (opt-in): copied 10-20 times a second, so they move a

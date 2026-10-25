@@ -109,10 +109,11 @@ namespace ams::mitm::applet {
 
     constinit std::atomic<bool> g_hb_docked{false};
 
-    /* v0.7.18: homebrew (hbl) with homebrew_docked on gets the docked answers;
-     * anything else has its state getter go to am untouched */
+    /* v0.7.18: homebrew (hbl, v0.7.18.1 a forwarder too) with homebrew_docked
+     * on gets the docked answers; anything else has its state getter go to am
+     * untouched */
     Result AmProxyMitm::GetCommonStateGetter(sf::Out<sf::SharedPointer<IAmStateMitm>> out) {
-        if (!m_client_info.override_status.IsHbl() || !g_hb_docked.load(std::memory_order_relaxed)) {
+        if (!IsHomebrewApp(m_client_info) || !g_hb_docked.load(std::memory_order_relaxed)) {
             R_THROW(sm::mitm::ResultShouldForwardToSession());
         }
         ::Service getter = {};

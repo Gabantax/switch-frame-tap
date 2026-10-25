@@ -811,7 +811,7 @@ namespace {
                 p.rows.push_back(Section("From the next app you start"));
                 p.rows.push_back(Toggle("Homebrew in docked mode (1080p)", [this] { return set.hb_docked; },
                     [this](int) { set.hb_docked = !set.hb_docked; Saved(); },
-                    "Tells homebrew started from the Homebrew Menu (hold R over a game) that the console is docked, so "
+                    "Tells homebrew started by holding R over a game, or from a forwarder on the HOME menu, that the console is docked, so "
                     "apps that choose their resolution from that - SDL2 ports, emulators - draw at 1080p and stream at "
                     "1080p. The console's screen still shows them. Apps with a fixed 1280x720 picture stay 720p. "
                     "Not for homebrew opened from the Album: there it has too little memory for 1080p."));

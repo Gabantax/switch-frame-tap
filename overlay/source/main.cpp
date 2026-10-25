@@ -362,7 +362,7 @@ namespace {
                     list->addItem(hb);
                 }
                 list->addItem(new tsl::elm::CustomDrawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
-                    r->drawString("From the next app started with R held over a game", false, x + 15, y + 22, 16, r->a(tsl::style::color::ColorDescription));
+                    r->drawString("Next app: R over a game, or a forwarder", false, x + 15, y + 22, 16, r->a(tsl::style::color::ColorDescription));
                 }), 36);
 
                 frame->setContent(list);

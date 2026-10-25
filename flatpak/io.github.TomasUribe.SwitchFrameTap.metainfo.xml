@@ -45,6 +45,11 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.18.1" date="2026-10-25">
+      <description>
+        <p>Viewer unchanged; the Switch side lets homebrew from forwarders run in docked mode.</p>
+      </description>
+    </release>
     <release version="0.7.18" date="2026-10-25">
       <description>
         <ul>

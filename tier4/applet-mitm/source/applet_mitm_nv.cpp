@@ -7165,6 +7165,17 @@ namespace ams::mitm::applet {
             PrepareForHomeMenu();
         }
 
+        /* v0.7.18: with the HOME menu streamed, the HOME button (or the 5 s
+         * fallback) ends the game's session but keeps the engines and the
+         * donor, so the HOME menu's session follows at once - giving them back
+         * with the 5 s hold put ~5 s without picture between the game and the
+         * HOME menu (test5). The Album, an applet that needs the memory or a
+         * web applet's menu still give them back. */
+        bool HomeDetachKeepsEngines(const char *home_why, bool web_fast) {
+            if (!g_ui_stream_armed || web_fast || home_why == nullptr) { return false; }
+            return std::strcmp(home_why, "HOME button") == 0 || std::strcmp(home_why, "present stall fallback") == 0;
+        }
+
         const char *SlotReadFailure() {
             return DebugPumpTargetGone() ? "slot read failed: the game exited" : "slot read failed";
         }
@@ -7574,9 +7585,13 @@ namespace ams::mitm::applet {
                             LogLine("home: detach (%s) after present stall %llu ms (probe %u, fallback %u)",
                                     home_why != nullptr ? home_why : "?",
                                     static_cast<unsigned long long>(age_ms), g_home_detach_ms, g_home_fallback_ms);
-                            /* Free donor now on confirm (and on 5 s fallback) so
-                             * Album / SwitchU is not racing a mapped 42 MB. */
-                            PrepareForHomeMenu();
+                            if (HomeDetachKeepsEngines(home_why, web_fast)) {
+                                LogLine("home: the HOME menu is streamed - the engines stay for its session");
+                            } else {
+                                /* Free donor now on confirm (and on 5 s fallback) so
+                                 * Album / SwitchU is not racing a mapped 42 MB. */
+                                PrepareForHomeMenu();
+                            }
                             end = StreamEnd::GameGone;
                             break;
                         }
@@ -8037,10 +8052,14 @@ namespace ams::mitm::applet {
                             LogLine("home: detach (%s) after present stall %llu ms (probe %u, fallback %u)",
                                     home_why != nullptr ? home_why : "?",
                                     static_cast<unsigned long long>(age_ms), g_home_detach_ms, g_home_fallback_ms);
-                            /* Free the 42 MB donor before SwitchU Album inits,
-                             * and hold re-setup so a connected viewer does not
-                             * remount it mid-handoff. */
-                            PrepareForHomeMenu();
+                            if (HomeDetachKeepsEngines(home_why, web_fast)) {
+                                LogLine("home: the HOME menu is streamed - the engines stay for its session");
+                            } else {
+                                /* Free the 42 MB donor before SwitchU Album inits,
+                                 * and hold re-setup so a connected viewer does not
+                                 * remount it mid-handoff. */
+                                PrepareForHomeMenu();
+                            }
                             end = StreamEnd::GameGone;
                             break;
                         }

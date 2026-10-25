@@ -45,6 +45,14 @@
   <content_rating type="oars-1.1"/>
   
   <releases>
+    <release version="0.7.18" date="2026-10-25">
+      <description>
+        <ul>
+          <li>Recordings stay one file: while the viewer records, the Switch keeps the picture at the size the recording started at.</li>
+          <li>Over USB the viewer repeats a request the Switch was not listening for yet.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.17" date="2026-10-24">
       <description>
         <ul>

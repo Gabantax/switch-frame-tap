@@ -813,7 +813,8 @@ namespace {
                     [this](int) { set.hb_docked = !set.hb_docked; Saved(); },
                     "Tells homebrew started from the Homebrew Menu (hold R over a game) that the console is docked, so "
                     "apps that choose their resolution from that - SDL2 ports, emulators - draw at 1080p and stream at "
-                    "1080p. The console's screen still shows them. Apps with a fixed 1280x720 picture stay 720p."));
+                    "1080p. The console's screen still shows them. Apps with a fixed 1280x720 picture stay 720p. "
+                    "Not for homebrew opened from the Album: there it has too little memory for 1080p."));
                 pages.push_back(std::move(p));
             }
 

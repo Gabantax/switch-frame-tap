@@ -420,6 +420,12 @@ Horizon OC or sys-clk; at the stock 1020 MHz it runs, a little below 60.
 Expect more heat and battery drain, and some games dislike fake docked mode
 (MK8D crashes with Joy-Cons attached; use a Pro Controller).
 
+**Homebrew at 1080p (beta).** ReverseNX-RT is for official games. On the app's
+**Beta** page (or in the overlay), **Homebrew in docked mode** tells homebrew
+started by holding R over a game that the console is docked, so apps that pick
+their resolution from that (SDL2 ports, emulators) draw and stream at 1080p.
+Not from the Album: homebrew there has too little memory for 1080p.
+
 ### The manager app
 
 | | |
@@ -476,9 +482,10 @@ releases.
 
 Needs an overlay menu (Tesla Menu or Ultrahand, on nx-ovlloader): stream
 on/off (remembered across reboots), live status, **Stream this app** (see
-below), **Enable sound in no-record games** (below), the two **Beta** switches
-(the HOME menu and the overlays in the stream, from the next restart), and Game
-default / Handheld (720p) / Docked (1080p) through ReverseNX-RT.
+below), **Enable sound in no-record games** (below), the **Beta** switches
+(the HOME menu and the overlays in the stream, from the next restart; homebrew
+in docked mode), and Game default / Handheld (720p) / Docked (1080p) through
+ReverseNX-RT.
 
 ### Sound in games that block recording
 
@@ -600,8 +607,9 @@ title-override mode, and (with **Stream the HOME menu** on, v0.7.14) the
 homebrew menu from the Album and the apps started from it - at the resolution
 the app draws (usually 1280x720).
 ReverseNX-RT cannot switch homebrew to docked mode (it works through the
-official SDK, which homebrew does not use), and most homebrew draws 720p in
-both modes anyway. Some apps refuse to run while a debugger is attached - the
+official SDK, which homebrew does not use); **Homebrew in docked mode** (beta,
+v0.7.18) does it for apps started by holding R over a game, and apps that pick
+their resolution from the mode then draw 1080p. Some apps refuse to run while a debugger is attached - the
 stream reads frames that way - such as TiCo's protected builds: turn **Stream
 this app** off in the overlay while one is running and restart it; the
 sysmodule then never touches it (no stream, no screenshots). The manager's
@@ -664,7 +672,8 @@ to `sdmc:/applet-mitm.log` - how every development run was done.
 - **Homebrew:** apps that run as applets (the homebrew menu from the Album)
   stream only with **Stream the HOME menu** on - otherwise use a forwarder or
   title override. Apps with anti-debug protection (TiCo) cannot be streamed;
-  exclude them. Homebrew cannot be forced into docked mode.
+  exclude them. Docked mode for homebrew (beta) works only in title override,
+  not from the Album (too little memory there for 1080p).
 - **The HOME menu** (opt-in): no sound outside games yet (the console's
   recorder only records games); a game's manual still pauses the stream.
 - **The overlays** (opt-in): copied 10-20 times a second, so they move a

@@ -84,6 +84,9 @@ public final class ProtocolTest {
         byte[] picOnly = SftProtocol.pictureNals(new byte[]{0,0,0,1,0x09,0x10, 0,0,0,1,0x67,0x64,0, 0,0,1,0x68,0x12, 0,0,1,0x06,5,5, 0,0,1,0x65,9,8, 0,0,0,1,0x41,7});
         check(Arrays.equals(picOnly, new byte[]{0,0,0,1,0x65,9,8, 0,0,0,1,0x41,7}), "AUD, SPS, PPS and SEI left out of a sample");
         check(SftProtocol.pictureNals(new byte[]{0,0,1,0x67,1,2}).length == 0, "no picture NAL unit");
+        // v0.7.18: a recording's requests start with the keyframe request (older consoles read only that)
+        check(Arrays.equals(Arrays.copyOf(SftProtocol.RECORD_LOCK, 4), SftProtocol.KEYFRAME_REQUEST)
+              && Arrays.equals(Arrays.copyOf(SftProtocol.RECORD_UNLOCK, 4), SftProtocol.KEYFRAME_REQUEST), "lock/unlock lead with SFTK");
         try { SftProtocol.parameterSets(new byte[]{0,0,1,0x65,1}); throw new AssertionError("missing SPS"); }
         catch (IOException expected) { checks++; }
         try { SftProtocol.readPacket(new Chunks(new byte[0]), () -> true); throw new AssertionError("cancellation"); }

@@ -221,6 +221,9 @@ namespace ams::mitm::applet {
                             if (std::memcmp(got + k, "SFTC", 4) == 0) { g_viewer_crop.store(true, std::memory_order_relaxed); }
                             /* v0.7.17: "SFTD" - it records: the pictures cropped here, not in the viewer */
                             if (std::memcmp(got + k, "SFTD", 4) == 0) { g_viewer_crop.store(false, std::memory_order_relaxed); }
+                            /* v0.7.18: "SFTL" / "SFTU" - one stream size while it records (#44) */
+                            if (std::memcmp(got + k, "SFTL", 4) == 0) { ViewerLockSize(true); }
+                            if (std::memcmp(got + k, "SFTU", 4) == 0) { ViewerLockSize(false); }
                         }
                     }
                     continue;
@@ -254,6 +257,7 @@ namespace ams::mitm::applet {
                  * every 240 frames on Wi-Fi. */
                 g_viewer_can_ask.store(false, std::memory_order_relaxed);
                 g_viewer_crop.store(false, std::memory_order_relaxed);   /* v0.7.16: until it sends SFTC */
+                ViewerLockSize(false);                                    /* v0.7.18: a new viewer records only once it says so */
                 g_viewer_key_request.store(true, std::memory_order_relaxed);
                 LogLine("net: auto keyframe for new viewer");
                 g_client = c;

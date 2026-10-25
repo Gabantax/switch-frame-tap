@@ -159,6 +159,12 @@ namespace ams::mitm::applet {
      * v0.7.16) get the crop scaled on the console instead: an unknown flag
      * made the Android app drop the connection. Cleared when the viewer goes. */
     extern std::atomic<bool> g_viewer_crop;
+    /* v0.7.18: the viewer records ("SFTL"): the stream keeps one size, the VIC
+     * scaling the picture to it, so a recording stays one file (#44). 0: not
+     * locked; ~0: lock at the next session's size; else w << 16 | h. "SFTU",
+     * SFTQ or the viewer going away unlock it. */
+    extern std::atomic<u32> g_size_lock;
+    void ViewerLockSize(bool lock);
     extern std::atomic<u64> g_queue_fence[4];
     /* M89: a seqlock over slot + fence: odd while the binder thread writes */
     extern std::atomic<u32> g_queue_seq;

@@ -28,8 +28,8 @@ final class Transports {
             try { return input.read(data, offset, length); }
             catch (SocketTimeoutException e) { return 0; }
         }
-        @Override public void requestKeyframe() {
-            try { socket.getOutputStream().write(SftProtocol.KEYFRAME_REQUEST); } catch (IOException ignored) { }
+        @Override public boolean request(byte[] message) {
+            try { socket.getOutputStream().write(message); return true; } catch (IOException e) { return false; }
         }
         @Override public void close() throws IOException { socket.close(); }
     }
@@ -82,9 +82,10 @@ final class Transports {
             }
             return n;
         }
-        @Override public void requestKeyframe() {
+        @Override public boolean request(byte[] message) {
             UsbEndpoint ep = out;
-            if (!closed && ep != null) connection.bulkTransfer(ep, SftProtocol.KEYFRAME_REQUEST, SftProtocol.KEYFRAME_REQUEST.length, 20);
+            if (closed || ep == null) return true;   // nothing to ask with: not a retry case
+            return connection.bulkTransfer(ep, message, message.length, 20) == message.length;
         }
         @Override public void close() {
             if (closed) return;

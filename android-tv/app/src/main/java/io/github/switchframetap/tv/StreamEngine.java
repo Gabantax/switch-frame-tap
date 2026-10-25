@@ -39,6 +39,7 @@ final class StreamEngine {
     private volatile VideoDecoder decoder;
     private volatile Recorder recorder;      // v0.7.16: recording to an MP4
     private volatile boolean keyWanted;       // ... which starts at a keyframe asked for now
+    private volatile boolean unlockWanted;    // v0.7.18: recording ended - the console may change size again
     private final Thread thread;
     StreamEngine(Context context, Surface surface, boolean usb, String address, String lastAddress,
                  boolean stableAudio, boolean muted, Listener listener) {
@@ -53,7 +54,16 @@ final class StreamEngine {
     /** v0.7.16: every packet from now on also goes to this recording. */
     void record(Recorder r) { recorder = r; keyWanted = true; }
     /** Ends the recording (it finishes the file on its own thread). */
-    void stopRecording() { Recorder r = recorder; recorder = null; if (r != null) r.stop(); }
+    void stopRecording() {
+        Recorder r = recorder; recorder = null;
+        if (r != null) { r.stop(); unlockWanted = true; keyWanted = true; }
+    }
+    /** v0.7.18: what to ask the console for - while recording, a keyframe and one
+     *  stream size; after it, a keyframe and the size free again. */
+    private byte[] requestNow() {
+        if (recorder != null) return SftProtocol.RECORD_LOCK;
+        return unlockWanted ? SftProtocol.RECORD_UNLOCK : SftProtocol.KEYFRAME_REQUEST;
+    }
     void stop() {
         stopRecording();
         stopped = true; thread.interrupt();
@@ -82,9 +92,18 @@ final class StreamEngine {
                     video = new VideoDecoder(surface, queue, stats, this::status); decoder = video; video.start();
                     if (stopped) break;
                     status("Connected. Open a game on the Switch…");
-                    long keyAskedNs = 0;
+                    long keyAskedNs = 0, retryAtNs = 0;
+                    int tries = 0;
                     while (!stopped) {
-                        if (keyWanted) { keyWanted = false; connected.requestKeyframe(); keyAskedNs = System.nanoTime(); }
+                        if (keyWanted && System.nanoTime() >= retryAtNs) {
+                            keyWanted = false;
+                            byte[] ask = requestNow();
+                            if (connected.request(ask)) { tries = 0; retryAtNs = 0; if (ask == SftProtocol.RECORD_UNLOCK) unlockWanted = false; }
+                            // USB: the console was not listening - again in 150 ms, for ~2 s
+                            else if (++tries < 14) { keyWanted = true; retryAtNs = System.nanoTime() + 150_000_000L; }
+                            else { tries = 0; retryAtNs = 0; }
+                            keyAskedNs = System.nanoTime();
+                        }
                         SftProtocol.Packet packet = SftProtocol.readPacket(connected, () -> stopped);
                         stats.bytes += packet.data.length + 32;
                         Recorder r = recorder;
@@ -100,7 +119,7 @@ final class StreamEngine {
                             stats.received++; stats.lastVideoNs = packet.receivedNs;
                             queue.offer(packet);
                             if (queue.takeKeyRequest() && packet.receivedNs - keyAskedNs > 300_000_000L) {
-                                connected.requestKeyframe(); keyAskedNs = packet.receivedNs;
+                                keyWanted = true; keyAskedNs = packet.receivedNs;   // v0.7.18: with the recording's size request, retried
                             }
                             stats.videoResets = queue.resets();
                             stats.videoDropped = queue.dropped();

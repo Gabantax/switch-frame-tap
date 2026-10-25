@@ -1124,6 +1124,10 @@ static SDL_atomic_t g_want_key;
 static void key_request(void) { SDL_AtomicSet(&g_want_key, 1); }
 static void key_send_pending(void)
 {
+    /* v0.7.18: a retry (below) waits 150 ms - while streaming, the console has
+     * its buffer back within ~8 frames, and each try may hold the reader 20 ms */
+    static Uint64 s_retry_at = 0;
+    if (s_retry_at != 0 && SDL_GetTicks64() < s_retry_at) return;
     if (!SDL_AtomicCAS(&g_want_key, 1, 0)) return;
     /* v0.7.16: + "SFTC" - this viewer draws crops itself (SFT_FLAG_CROP); a
      * console only sends them to a viewer that said so. Older consoles read
@@ -1132,11 +1136,24 @@ static void key_send_pending(void)
      * it comes, and a crop drawn here never reached the file (Mario Galaxy's
      * dynamic resolution: old picture beside the part it drew); the console
      * crops the pictures itself meanwhile. */
-    static const unsigned char msg_crop[8] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'C' };
-    static const unsigned char msg_nocrop[8] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'D' };
+    /* v0.7.18: + "SFTL" while recording - the console keeps the stream at the
+     * size the recording started at (it scales the picture), so the MP4 stays
+     * one file; "SFTU" lets it follow the game again (#44). */
+    static const unsigned char msg_crop[12] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'C', 'S', 'F', 'T', 'U' };
+    static const unsigned char msg_nocrop[12] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'D', 'S', 'F', 'T', 'L' };
     const unsigned char *msg = rec_active() ? msg_nocrop : msg_crop;
     if (g_sock != SOCK_BAD) { send(g_sock, (const char *)msg, sizeof(msg_crop), 0); }
-    else if (g_usb) { int n = 0; libusb_bulk_transfer(g_usb, SFT_EP_OUT, (unsigned char *)msg, sizeof(msg_crop), &n, 20); }
+    else if (g_usb) {
+        /* v0.7.18: the console takes a request only while a buffer of its own
+         * waits for it - between two, the 20 ms run out and the request was
+         * lost (#45: SFTC at connect). Again on the next pass, for up to ~2 s;
+         * tries 150 ms apart. */
+        static int tries = 0;
+        int n = 0;
+        const int rc = libusb_bulk_transfer(g_usb, SFT_EP_OUT, (unsigned char *)msg, sizeof(msg_crop), &n, 20);
+        if (rc == LIBUSB_ERROR_TIMEOUT && n == 0 && ++tries < 14) { SDL_AtomicSet(&g_want_key, 1); s_retry_at = SDL_GetTicks64() + 150; }
+        else { tries = 0; s_retry_at = 0; }
+    }
 }
 
 static int reader_main(void *arg)

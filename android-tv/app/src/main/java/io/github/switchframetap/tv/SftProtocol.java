@@ -22,9 +22,17 @@ final class SftProtocol {
         @Override void close() throws IOException;
         /** "SFTK": the console sends a keyframe now instead of at its next one
          *  (up to 4 s away over the network). Consoles before v0.7.13 ignore it. */
-        default void requestKeyframe() { }
+        default void requestKeyframe() { request(KEYFRAME_REQUEST); }
+        /** v0.7.18: a request to the console; false if it did not take it (USB:
+         *  the console was not listening at that moment - ask again later). */
+        default boolean request(byte[] message) { return true; }
     }
     static final byte[] KEYFRAME_REQUEST = { 'S', 'F', 'T', 'K' };
+    /** v0.7.18: recording - the console keeps the stream at one size (it scales
+     *  the picture), so the MP4 stays one file; consoles before 0.7.18 read the
+     *  keyframe request only (#44). */
+    static final byte[] RECORD_LOCK = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'L' };
+    static final byte[] RECORD_UNLOCK = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'U' };
     static final class Packet {
         final int flags, width, height;
         final long sequence, consoleAgeUs, receivedNs;

@@ -1901,6 +1901,13 @@ namespace ams::mitm::applet {
     constinit std::atomic<bool> g_viewer_key_request{false};
     constinit std::atomic<bool> g_viewer_can_ask{false};
     constinit std::atomic<bool> g_viewer_crop{false};
+    constinit std::atomic<u32> g_size_lock{0};
+    void ViewerLockSize(bool lock) {
+        if (!lock) { g_size_lock.store(0, std::memory_order_relaxed); return; }
+        if (g_size_lock.load(std::memory_order_relaxed) != 0) { return; }   /* already: a repeated request */
+        const u32 w = g_live_w.load(std::memory_order_relaxed), h = g_live_h.load(std::memory_order_relaxed);
+        g_size_lock.store(g_streaming_now.load(std::memory_order_relaxed) && w != 0 ? (w << 16 | h) : ~0u, std::memory_order_relaxed);
+    }
     constinit std::atomic<u64> g_queue_fence[4] = {};
     constinit std::atomic<u32> g_queue_seq{0};
     constinit PresentRec g_present_ring[PresentRingSize] = {};
@@ -7656,8 +7663,27 @@ namespace ams::mitm::applet {
              * more than 1280x720 of it is shown - SMO docked (1600x900, dynamic
              * resolution below that) at 1080p looked no better than 720p at the
              * same bitrate, and cost fps and a frame of latency (Run v0713-smo2) */
-            const bool full1080 = uvc ? (uvc_w == 1920 && fits1080)
-                                      : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080);
+            bool full1080 = uvc ? (uvc_w == 1920 && fits1080)
+                                : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080);
+            /* v0.7.18: the viewer records - the size the recording started at,
+             * the VIC scaling whatever is drawn to it (as for a webcam): the HOME
+             * menu's 720p goes up to 1080p, a 1080p picture down to 720p, and the
+             * MP4 stays one file (#44) */
+            if (live && !uvc) {
+                u32 lock = g_size_lock.load(std::memory_order_relaxed);
+                if (lock == ~0u) {
+                    lock = full1080 ? (1920u << 16 | 1080u) : (1280u << 16 | 720u);
+                    g_size_lock.store(lock, std::memory_order_relaxed);
+                }
+                if (lock != 0) {
+                    const bool lock1080 = (lock >> 16) == 1920;
+                    if (lock1080 && !fits1080) { LogLine("   nvstream: the recording is 1080p but the capture region holds 720p only - 720p"); }
+                    if (full1080 != (lock1080 && fits1080)) {
+                        LogLine("   nvstream: the viewer records at %ux%u - the picture is scaled to it", lock >> 16, lock & 0xFFFF);
+                    }
+                    full1080 = lock1080 && fits1080;
+                }
+            }
             if (uvc && uvc_w == 1920 && !fits1080) { LogLine("   nvstream: webcam asked for 1080p but the capture region is too small - sending 720p"); }
             u32 uvc_drops = uvc ? UvcDroppedCount() : 0;
             s.lay = full1080 ? std::addressof(Layout1080()) : nullptr;
@@ -8243,7 +8269,7 @@ namespace ams::mitm::applet {
              * until the next stream's first frame is out. */
             if (end == StreamEnd::GameGone || end == StreamEnd::Reconfigure) { LogDefer(true); }
             LogLine("   nvstream: stopped: %s", why);
-            if (end == StreamEnd::ViewerGone) { g_viewer_crop.store(false, std::memory_order_relaxed); }   /* v0.7.16: the next viewer says again */
+            if (end == StreamEnd::ViewerGone) { g_viewer_crop.store(false, std::memory_order_relaxed); g_size_lock.store(0, std::memory_order_relaxed); }   /* v0.7.16: the next viewer says again */
             if (s.center_frames != 0) {   /* v0.7.16 */
                 LogLine("   nvstream: a centred crop in %u frames (the viewer showed only the middle)", s.center_frames);
             }

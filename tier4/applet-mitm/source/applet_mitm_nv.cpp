@@ -7747,36 +7747,36 @@ namespace ams::mitm::applet {
              * more than 1280x720 of it is shown - SMO docked (1600x900, dynamic
              * resolution below that) at 1080p looked no better than 720p at the
              * same bitrate, and cost fps and a frame of latency (Run v0713-smo2) */
-            const bool full1080 = uvc ? (uvc_w == 1920 && fits1080)
-                                      : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080);
-            /* v0.7.18: a 1080p picture on a donor taken smaller beside the Album or
-             * System Settings, with the room back: one more setup on the full one
-             * (about a second) rather than the whole session at 720p */
-            {
-                const bool want1080 = uvc ? uvc_w == 1920 : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed);
-                if (live && want1080 && !fits1080 && g_donor_mode && DonorCanGrow()) {
-                    g_donor_regrow.store(true, std::memory_order_relaxed);
-                    return StreamEnd::Regrow;
             bool full1080 = uvc ? (uvc_w == 1920 && fits1080)
                                 : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed && fits1080);
             /* v0.7.18: the viewer records - the size the recording started at,
              * the VIC scaling whatever is drawn to it (as for a webcam): the HOME
              * menu's 720p goes up to 1080p, a 1080p picture down to 720p, and the
              * MP4 stays one file (#44) */
-            if (live && !uvc) {
-                u32 lock = g_size_lock.load(std::memory_order_relaxed);
-                if (lock == ~0u) {
-                    lock = full1080 ? (1920u << 16 | 1080u) : (1280u << 16 | 720u);
-                    g_size_lock.store(lock, std::memory_order_relaxed);
+            u32 lock = (live && !uvc) ? g_size_lock.load(std::memory_order_relaxed) : 0;
+            if (lock == ~0u) {
+                lock = full1080 ? (1920u << 16 | 1080u) : (1280u << 16 | 720u);
+                g_size_lock.store(lock, std::memory_order_relaxed);
+            }
+            const bool lock1080 = lock != 0 && (lock >> 16) == 1920;
+            /* v0.7.18: a 1080p picture (or a 1080p recording) on a donor taken
+             * smaller beside the Album or System Settings, with the room back: one
+             * more setup on the full one (about a second) rather than the whole
+             * session at 720p */
+            {
+                const bool want1080 = uvc ? uvc_w == 1920
+                                          : (lock != 0 ? lock1080 : (!s.corner && s.src.w == 1920 && s.src.h == 1080 && !g_cap720_armed));
+                if (live && want1080 && !fits1080 && g_donor_mode && DonorCanGrow()) {
+                    g_donor_regrow.store(true, std::memory_order_relaxed);
+                    return StreamEnd::Regrow;
                 }
-                if (lock != 0) {
-                    const bool lock1080 = (lock >> 16) == 1920;
-                    if (lock1080 && !fits1080) { LogLine("   nvstream: the recording is 1080p but the capture region holds 720p only - 720p"); }
-                    if (full1080 != (lock1080 && fits1080)) {
-                        LogLine("   nvstream: the viewer records at %ux%u - the picture is scaled to it", lock >> 16, lock & 0xFFFF);
-                    }
-                    full1080 = lock1080 && fits1080;
+            }
+            if (lock != 0) {
+                if (lock1080 && !fits1080) { LogLine("   nvstream: the recording is 1080p but the capture region holds 720p only - 720p"); }
+                if (full1080 != (lock1080 && fits1080)) {
+                    LogLine("   nvstream: the viewer records at %ux%u - the picture is scaled to it", lock >> 16, lock & 0xFFFF);
                 }
+                full1080 = lock1080 && fits1080;
             }
             if (uvc && uvc_w == 1920 && !fits1080) { LogLine("   nvstream: webcam asked for 1080p but the capture region is too small - sending 720p"); }
             u32 uvc_drops = uvc ? UvcDroppedCount() : 0;
